@@ -41,25 +41,42 @@
 ## 项目结构
 
 ```
-backend/
-├── __init__.py       # 包初始化
-├── main.py           # 应用入口
-├── config.py         # 配置管理
-├── models.py         # Pydantic 数据模型
-├── services.py       # 业务逻辑服务
-└── routes.py         # API 端点
-
-frontend/
-├── index.html        # 前端主页面
-├── app.js            # 前端 JavaScript
-└── styles.css        # 前端样式
+├── backend/                 # FastAPI 后端
+│   ├── __init__.py
+│   ├── main.py             # 应用入口
+│   ├── config.py           # 配置（从 .env 读取）
+│   ├── models.py           # Pydantic 数据模型
+│   ├── logging_config.py   # 日志配置
+│   ├── routes.py           # API 端点
+│   └── services/
+│       ├── session.py      # 会话管理
+│       ├── auth.py         # 认证
+│       ├── file_handler.py # 文件验证与 PDF 转换
+│       └── printer.py      # IPP 打印机交互
+├── frontend/               # Web 界面（原生 JS）
+│   ├── index.html
+│   ├── app.js
+│   └── styles.css
+├── docker/                 # 部署——生产只需此目录
+│   ├── Dockerfile          # 多阶段构建（git clone + pip install）
+│   ├── compose.yaml        # Podman Compose 编排
+│   ├── .env.example        # 配置模板
+│   └── justfile            # 快捷命令
+├── .env.example -> docker/.env.example  # 软链接，方便本地开发
+├── pyproject.toml          # 项目元数据和依赖
+├── uv.lock                 # 锁文件（可复现安装）
+├── CLAUDE.md               # AI 编程助手指引
+└── LICENSE                 # MIT
 ```
 
 ## 快速开始
 
-### 方式一：使用 Podman Compose 启动
+### 方式一：使用 Podman Compose 部署（生产）
+
+将 `docker/` 目录拷贝到目标机器，配置 `.env` 后启动：
 
 ```bash
+cd docker
 cp .env.example .env
 # 编辑 .env 配置你的打印机信息
 
@@ -72,15 +89,13 @@ podman-compose up -d
 # 如果未安装 uv，先安装它
 curl -LsSf https://astral.sh/uv/install.sh | sh
 
-# 复制环境变量文件
-cp .env.example .env
+# 初始化环境
+cp docker/.env.example .env
 # 编辑 .env 配置你的打印机信息
-
-# 初始化 uv 项目（创建 .venv）
 uv sync
 
 # 运行服务
-uv run uvicorn backend.main:app --host 0.0.0.0 --port 3001
+uv run python backend/main.py
 ```
 
 ### 3. 访问 Web 界面
@@ -118,10 +133,12 @@ Web 界面功能：
 | `MAX_UPLOAD_MB` | 50 | 最大上传大小（MB） |
 | `RATE_LIMIT_PER_IP` | 5/minute | 每 IP 限流频率 |
 | `LOG_LEVEL` | INFO | 日志级别 |
-| `IPP_DEFAULT_MEDIA` | iso-a4 | 默认纸张尺寸 |
+| `IPP_DEFAULT_MEDIA` | iso_a4_210x297mm | 默认纸张尺寸 |
 | `IPP_DEFAULT_QUALITY` | normal | 默认打印质量 |
 | `IPP_DEFAULT_ORIENTATION` | portrait | 默认打印方向 |
 | `IPP_USER_NAME` | fastapi | 打印任务用户名 |
+| `HOST` | 127.0.0.1 | 服务监听地址 |
+| `PORT` | 3001 | 服务端口 |
 
 ## 打印机能力检测
 
@@ -134,9 +151,10 @@ Web 界面功能：
 
 - **后端**: FastAPI + Python 3.11
 - **打印**: IPP 协议（`pyipp`）
-- **PDF 处理**: PyPDF2, img2pdf
+- **PDF 处理**: PyPDF2, img2pdf, Pillow
 - **限流**: slowapi
 - **部署**: Podman + Podman Compose
+- **包管理**: uv（带锁文件）
 
 ## 许可证
 

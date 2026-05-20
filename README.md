@@ -41,25 +41,42 @@ Deploy on minimal hardware:
 ## Project Structure
 
 ```
-backend/
-├── __init__.py       # Package initialization
-├── main.py           # Application entry point
-├── config.py         # Configuration management
-├── models.py         # Pydantic data models
-├── services.py       # Business logic services
-└── routes.py         # API endpoints
-
-frontend/
-├── index.html        # Frontend main page
-├── app.js            # Frontend JavaScript
-└── styles.css        # Frontend styles
+├── backend/                 # FastAPI backend
+│   ├── __init__.py
+│   ├── main.py             # Application entry point
+│   ├── config.py           # Configuration (reads from .env)
+│   ├── models.py           # Pydantic data models
+│   ├── logging_config.py   # Logging configuration
+│   ├── routes.py           # API endpoints
+│   └── services/
+│       ├── session.py      # Session management
+│       ├── auth.py         # Authentication
+│       ├── file_handler.py # File validation and PDF conversion
+│       └── printer.py      # IPP printer interaction
+├── frontend/               # Web UI (vanilla JS)
+│   ├── index.html
+│   ├── app.js
+│   └── styles.css
+├── docker/                 # Deployment — the only dir needed for production
+│   ├── Dockerfile          # Multi-stage build (git clone + pip install)
+│   ├── compose.yaml        # Podman Compose orchestration
+│   ├── .env.example        # Configuration template
+│   └── justfile            # Shortcut commands
+├── .env.example -> docker/.env.example  # Symlink for local dev
+├── pyproject.toml          # Project metadata and dependencies
+├── uv.lock                 # Lock file for reproducible installs
+├── CLAUDE.md               # Guidance for AI coding assistants
+└── LICENSE                 # MIT
 ```
 
 ## Quick Start
 
-### Option A: Run with Podman Compose
+### Option A: Deploy with Podman Compose (production)
+
+Copy the `docker/` directory to your target machine, configure `.env`, and run:
 
 ```bash
+cd docker
 cp .env.example .env
 # Edit .env with your printer settings
 
@@ -72,15 +89,13 @@ podman-compose up -d
 # Install uv if not already installed
 curl -LsSf https://astral.sh/uv/install.sh | sh
 
-# Copy environment file
-cp .env.example .env
+# Setup environment
+cp docker/.env.example .env
 # Edit .env with your printer settings
-
-# Initialize uv project (creates .venv)
 uv sync
 
 # Run the server
-uv run uvicorn backend.main:app --host 0.0.0.0 --port 3001
+uv run python backend/main.py
 ```
 
 ### 3. Access the Web UI
@@ -118,10 +133,12 @@ The web interface provides:
 | `MAX_UPLOAD_MB` | 50 | Maximum upload size (MB) |
 | `RATE_LIMIT_PER_IP` | 5/minute | Rate limit per IP |
 | `LOG_LEVEL` | INFO | Logging level |
-| `IPP_DEFAULT_MEDIA` | iso-a4 | Default paper size |
+| `IPP_DEFAULT_MEDIA` | iso_a4_210x297mm | Default paper size |
 | `IPP_DEFAULT_QUALITY` | normal | Default print quality |
 | `IPP_DEFAULT_ORIENTATION` | portrait | Default print orientation |
 | `IPP_USER_NAME` | fastapi | Username for print jobs |
+| `HOST` | 127.0.0.1 | Server bind address |
+| `PORT` | 3001 | Server port |
 
 ## Printer Capabilities Detection
 
@@ -134,9 +151,10 @@ The `/printer/capabilities` endpoint automatically detects what printing options
 
 - **Backend**: FastAPI + Python 3.11
 - **Printing**: IPP protocol via `pyipp`
-- **PDF Processing**: PyPDF2, img2pdf
+- **PDF Processing**: PyPDF2, img2pdf, Pillow
 - **Rate Limiting**: slowapi
 - **Deployment**: Podman + Podman Compose
+- **Package Management**: uv (with lock file)
 
 ## License
 
