@@ -1,9 +1,0 @@
-python-dotenv>=1.0.0
-fastapi>=0.129.2
-img2pdf>=0.6.3
-pillow>=12.1.1
-pyipp>=0.17.2
-pypdf2>=3.0.1
-python-multipart>=0.0.22
-slowapi>=0.1.9
-uvicorn[standard]>=0.41.0

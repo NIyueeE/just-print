@@ -11,7 +11,6 @@ dependencies = [
     "pillow>=12.1.1",
     "pyipp>=0.17.2",
     "pypdf2>=3.0.1",
-    "python-magic>=0.4.27",
     "python-multipart>=0.0.22",
     "slowapi>=0.1.9",
     "uvicorn[standard]>=0.41.0",

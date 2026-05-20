@@ -4,6 +4,8 @@ services:
       context: .
       args:
         BASE_IMAGE: ${REGISTRY}/python:3.11-slim
+        REPO_URL: ${REPO_URL:-https://github.com/NIyueeE/just-printing-server.git}
+        REF: ${REF:-main}
     network_mode: host  # 使用主机网络，直接监听主机端口
     environment:
       - FRONTEND_PATH=${FRONTEND_PATH:-frontend}
@@ -17,5 +19,7 @@ services:
       - IPP_DEFAULT_QUALITY=${IPP_DEFAULT_QUALITY:-normal}
       - IPP_DEFAULT_ORIENTATION=${IPP_DEFAULT_ORIENTATION:-portrait}
       - IPP_USER_NAME=${IPP_USER_NAME:-fastapi}
+      - HOST=${HOST:-127.0.0.1}
+      - PORT=${PORT:-3001}
     restart: unless-stopped
     # 无 volumes，无状态

@@ -23,5 +23,9 @@ class Config:
     IPP_DEFAULT_ORIENTATION = os.getenv("IPP_DEFAULT_ORIENTATION", "portrait")
     IPP_USER_NAME = os.getenv("IPP_USER_NAME", "fastapi")
 
+    # 服务监听配置
+    HOST = os.getenv("HOST", "127.0.0.1")
+    PORT = int(os.getenv("PORT", "3001"))
+
 
 config = Config()
