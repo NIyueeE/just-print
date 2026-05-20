@@ -22,4 +22,4 @@ COPY --from=builder /app /app
 
 WORKDIR /app
 
-CMD ["python", "backend/main.py"]
+CMD ["python", "-m", "backend.main"]
