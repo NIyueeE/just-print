@@ -30,7 +30,7 @@ jobs:
           file: Containerfile
           push: true
           tags: |
-            ghcr.io/${{ lower(github.repository) }}:latest
-            ghcr.io/${{ lower(github.repository) }}:${{ github.ref_name }}
+            ghcr.io/${{ lowercase(github.repository) }}:latest
+            ghcr.io/${{ lowercase(github.repository) }}:${{ github.ref_name }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
