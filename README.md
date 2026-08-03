@@ -8,11 +8,11 @@
 
 ## 特性
 
-- 通过轮询 `/sys/class/usb/lp*` 发现打印机（含热插拔），从 sysfs 获取简要名称与序列号，默认选中第一台打印机
+- 通过轮询 `/sys/class/usb/lp*` 发现打印机（含热插拔），从 sysfs 获取简要名称与序列号；前端自动选中第一台可用（支持 PDF）打印机
 - 通过 PJL 查询打印机的完整能力，只暴露实用参数（双面/翻页、省墨、墨水浓度、纸张类型、打印分辨率等）
 - 上传常见工作文档（DOCX / XLSX / PPTX / ODT / ODS / ODP / Markdown / 纯文本 / PDF），由镜像内置的 headless LibreOffice 统一转换为 PDF 并提供预览
 - 同一台打印机的所有设备访问（打印 / 能力查询 / 复位）严格串行，任务按提交顺序 FIFO 执行
-- 单令牌准入（Bearer）：不区分用户、无会话；TLS 由云网关 / 反向代理终结
+- 单令牌准入（Bearer，常量时间比较，未配置令牌时 fail-closed 拒绝启动）：不区分用户、无会话；TLS 由云网关 / 反向代理终结
 - 前端采用 Gruvbox 配色，提供上传、预览、控制项和任务状态展示
 - 交付为单一 OCI 镜像（`ghcr.io/niyueee/just-print`），前端静态文件由后端从镜像内目录提供，不再内嵌进二进制
 
@@ -44,14 +44,26 @@ flowchart LR
 just-print/
 ├── Cargo.toml            # Rust 后端：axum + tokio + tower-http
 ├── src/
-│   └── main.rs           # 后端入口：静态前端 + /healthz（业务 API 按路线图实现）
+│   ├── main.rs           # 后端入口：装配配置、后台任务与 HTTP 服务
+│   ├── api/              # Web API：auth / files / printers / print / jobs
+│   ├── pjl/              # PJL 包装层：discover / capabilities / session
+│   ├── config.rs         # 环境变量配置与 fail-closed 校验
+│   ├── conversion.rs     # LibreOffice 文档转 PDF（信号量限并发）
+│   ├── registry.rs       # 打印机注册表：轮询发现、热插拔 diff、worker 生命周期
+│   ├── workers.rs        # 每打印机 FIFO worker（打印/能力查询/复位串行）
+│   ├── store.rs          # 内存文件/任务存储：引用计数 + TTL 清理
+│   ├── ids.rs            # 进程内唯一 id（32 位十六进制）
+│   └── error.rs / state.rs
 ├── frontend/             # Preact + Vite + TypeScript 前端
 │   ├── package.json
 │   ├── vite.config.ts
 │   └── src/
-│       ├── main.tsx
-│       ├── app.tsx
-│       └── index.css
+│       ├── api.ts              # API 封装与类型定义
+│       ├── app.tsx / main.tsx  # 主界面与入口
+│       ├── app.css / index.css # Gruvbox 配色与布局
+│       └── components/         # TokenGate / Uploader / PrinterPanel / JobList
+├── docs/
+│   └── api.md           # Web API v1 详细契约（错误码、请求/响应示例）
 ├── Containerfile         # 兼容 docker/podman 的多阶段镜像构建
 ├── examples/
 │   ├── compose.yaml              # docker compose / podman-compose 示例
@@ -120,7 +132,7 @@ podman build -f Containerfile -t ghcr.io/niyueee/just-print:local .
 
 | 变量 | 默认值 | 说明 |
 | --- | --- | --- |
-| `JUST_PRINT_TOKEN` | 无 | 准入令牌，建议 32 字节以上随机值；未配置或为空时服务拒绝启动（fail-closed，待后端实现后生效） |
+| `JUST_PRINT_TOKEN` | 无 | 准入令牌，建议 32 字节以上随机值；未配置或为空时服务拒绝启动（fail-closed，已实现） |
 | `JUST_PRINT_ADDR` | `0.0.0.0:8080` | 后端监听地址；容器内直接对外监听，TLS 由云负载均衡 / Ingress / 反向代理终结 |
 | `JUST_PRINT_WEB_DIR` | `/usr/share/just-print/web` | 前端静态文件目录（镜像内已内置，一般无需修改） |
 | `JUST_PRINT_SYSFS_DIR` | `/sys/class/usb` | 设备发现扫描根目录；默认无需修改，测试/伪设备场景可指向临时目录 |
@@ -129,7 +141,7 @@ podman build -f Containerfile -t ghcr.io/niyueee/just-print:local .
 ### TLS 与访问控制
 
 - 后端只提供 HTTP，证书在云网关（ALB / Ingress / Caddy / nginx 等）处终结，再转发到已发布的 8080 端口。
-- 除健康检查外，`/api/*` 请求必须携带 `Authorization: Bearer <token>`（待后端实现）；不使用 Cookie 与会话，无 CSRF 问题。
+- 除健康检查外，`/api/*` 请求必须携带 `Authorization: Bearer <token>`（已实现，常量时间比较）；不使用 Cookie 与会话，无 CSRF 问题。
 - 前端将令牌保存在 `sessionStorage`，收到 401 时回到令牌输入页。
 
 ### USB 打印机透传
@@ -163,7 +175,13 @@ just init-hooks
 
 钩子脚本位于 `.githooks/pre-commit`，随仓库一起维护；检查失败时提交会被中止。
 
-## Web API 规划
+### 测试覆盖
+
+- `cargo test`：19 个单元测试，覆盖 PJL 能力解析（含真实打印机样例）、sysfs 设备发现、会话字节流与超时、控制参数校验、PDF 校验与 id 生成。
+- CI（[.github/workflows/ci.yml](.github/workflows/ci.yml)）：完整检查链 + 镜像构建 + 容器冒烟测试（未带令牌 401、上传 txt 经 LibreOffice 转 PDF 并预览、缺失打印机 404）。
+- 无打印机环境可做伪设备全链路验证：`JUST_PRINT_SYSFS_DIR` 指向含 `lp0` 条目的伪 sysfs 目录、`JUST_PRINT_DEVICE_DIR` 指向含 FIFO 设备的目录，即可走通「发现 → 能力查询 → 打印」闭环。
+
+## Web API v1（已实现）
 
 最简 API；除健康检查外，所有接口都需要 Bearer 令牌：
 
@@ -177,7 +195,7 @@ just init-hooks
 
 任务与文件 id 仅存在于内存中：服务重启后均不再有效（请求返回 404），前端应提示「服务已重启，请重新上传」。
 
-以上 API 已实现（v1），详细契约见 [docs/api.md](docs/api.md)。
+所有错误响应统一为 `{"error": {"code": "...", "message": "..."}}`，完整契约见 [docs/api.md](docs/api.md)。
 
 ## 支持的上传格式
 
@@ -218,7 +236,7 @@ just init-hooks
 ### 所有设备访问整体串行
 
 - 不只打印任务需要串行：能力查询、设备复位同样是 PJL 会话，必须走同一台打印机的 worker，否则会把查询字节穿插进打印数据流。
-- 能力查询是低频 init 操作：仅在设备被发现或热插拔时执行一次并缓存，不随每次打印重复查询；查询命令排在已排队的打印任务之后。
+- 能力查询是低频 init 操作：设备被发现/热插拔时入队执行并缓存，不随每次打印重复查询；查询失败后随轮询周期重试，重试查询排在已排队的打印任务之后。
 - 查询失败不阻塞服务启动：设备先标记为「能力未知」，随轮询周期自动重试，成功后出现在打印机列表中。
 
 ### 设备发现与热插拔
@@ -230,8 +248,8 @@ just init-hooks
 ### 失败、超时与复位
 
 - 单个任务失败：标记为失败并继续执行队列中的下一个任务，**不自动重试**——打印是物理动作，自动重试可能重复出纸；用户手动重试时，新任务排在队尾。
-- 设备会话带超时（v1 默认 60 秒，实现时计划改为可配置）：卡纸、离线等情况不能永久阻塞队列。
-- 对 `/dev/usb/lp*` 的写可能是阻塞式的（设备停止接收数据时），超时不能只依赖 tokio 任务取消；实现时需用非阻塞 fd + poll 超时或分块写 + watchdog。
+- 设备会话带超时（v1 固定 60 秒，暂不可配置）：卡纸、离线等情况不能永久阻塞队列。
+- 对 `/dev/usb/lp*` 的写可能是阻塞式的（设备停止接收数据时）：会话已用非阻塞 fd（`AsyncFd`）+ 每步超时实现，写入/读取不会永久阻塞 worker，也不会只依赖 tokio 任务取消。
 - 超时或失败导致设备状态未知时，下一次会话开始前先发送 PJL UEL（`\x1B%-12345X`）复位，避免残留参数影响后续任务。
 - 打印过程中设备被拔走：正在打印的任务失败，该打印机队列中排队的所有任务也标记失败（原因：打印机已移除），worker 销毁；设备重新插入后按新发现处理并重新查询能力。
 
@@ -251,7 +269,7 @@ just init-hooks
 - [x] 交付形态：Containerfile（docker/podman）、GHCR 发布、compose 与 Quadlet 示例
 - [x] 后端 HTTP 骨架：静态前端 + `/healthz`
 - [x] PJL 包装层
-  - [x] 轮询 `/sys/class/usb/lp*` 发现设备（v1 固定 5 秒），读取 sysfs `product` / `manufacturer` / `serial`；默认选中第一台
+  - [x] 轮询 `/sys/class/usb/lp*` 发现设备（v1 固定 5 秒），读取 sysfs `product` / `manufacturer` / `serial`；前端默认选中第一台可用打印机
   - [x] 以 sysfs `serial` 维护设备身份，缺失时回退 lp 节点路径
   - [x] 设备发现/热插拔时通过 PJL 查询能力并解析、缓存，仅保留实用参数：
     - 双面打印与翻页：`DUPLEX`、`BINDING`
@@ -273,6 +291,7 @@ just init-hooks
   - [x] 打印机选择与实用控制项
   - [x] 令牌输入与 `sessionStorage` 存储、401 处理
   - [x] 任务状态展示（含服务重启导致的 404 提示）
+- [ ] 真机验证：在真实 USB 打印机上验证 PJL 会话、打印输出与热插拔行为（当前 WSL 环境无打印机，已用伪设备完成全链路测试）
 
 ## 设计约定
 
@@ -282,7 +301,7 @@ just init-hooks
 - 单租户、无用户体系：准入仅依赖共享令牌 `JUST_PRINT_TOKEN`，不使用会话与 Cookie。
 - 传输安全由云网关 / 反向代理负责：后端仅提供 HTTP，容器内默认监听 `0.0.0.0:8080`。
 - 同一台打印机的所有设备访问（打印 / 能力查询 / 复位）严格串行，不同打印机可以并行。
-- 能力查询仅在设备发现/热插拔时执行并缓存，不在每次打印时重复查询。
+- 能力查询仅在设备发现/热插拔时执行并缓存，不在每次打印时重复查询；失败后随轮询周期自动重试。
 - 队列保存在内存中，重启后任务与临时文件作废；打印失败不自动重试，避免重复出纸。
 - 后端启用严格 lint：`unsafe_code`、`panic`、`unwrap_used`、`indexing_slicing` 均为 deny，clippy 全量 pedantic deny，`missing_docs` deny。
 
@@ -295,8 +314,8 @@ just init-hooks
 - 无序列号打印机的身份依赖设备节点路径，拔插后路径变化会被识别为新设备。
 - 热插拔期间正在打印或排队中的任务会失败，需要用户重新提交。
 - 容器场景下 USB 热插拔依赖宿主 udev 与设备节点映射，能力有限。
-- 设备会话固定 60 秒超时可能中断超大打印任务，v1 暂不可配置；实现时需同时设计阻塞式设备写入的超时/取消机制。
-- 当前开发环境（WSL）没有真实打印机，PJL 会话与热插拔行为尚未在实体设备上验证；能力解析与字节流构造已有单元测试覆盖。
+- 设备会话固定 60 秒超时，超大打印任务可能被中断，v1 暂不可配置；阻塞式写入已通过非阻塞 fd + 每步超时规避。
+- 当前开发环境（WSL）没有真实打印机：已用伪设备（FIFO + 伪 sysfs）完成发现、能力查询、打印与热插拔的全链路验证，能力解析与会话字节流有单元测试覆盖，但真实 USB 设备上的行为仍需实体验证。
 
 ## 附录：PJL 打印字节流（设计约定）
 
@@ -311,10 +330,10 @@ just init-hooks
 \x1B%-12345X                      # UEL：结束会话 / 复位
 ```
 
-约定：
+约定（由 `src/pjl/session.rs` 实现）：
 
 - 控制信息只允许使用能力查询返回的合法值；未查询到对应能力时不下发该参数。
-- 部分打印机不支持 PDF personality（只支持 PCL / PostScript 等）：能力查询时应确认/记录 PDF 支持情况，不支持时将该设备标记为不可用并在前端提示，而不是发送后得到乱码。
+- 部分打印机不支持 PDF personality（只支持 PCL / PostScript 等）：能力查询会解析 `PERSONALITY`，明确不含 `PDF` 时将该设备标记为不可用并在前端提示并禁用打印，而不是发送后得到乱码。
 - 能力查询、打印、复位都是完整 PJL 会话，必须由同一台打印机的 worker 串行执行。
 
 ## 附录：PJL 能力查询参考
