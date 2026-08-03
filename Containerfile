@@ -4,7 +4,7 @@
 #   podman build -f Containerfile -t ghcr.io/niyueee/just-print:local .
 
 # ---------- 前端构建 ----------
-FROM oven/bun:1 AS frontend-builder
+FROM docker.io/oven/bun:1 AS frontend-builder
 WORKDIR /app/frontend
 COPY frontend/package.json frontend/bun.lock ./
 RUN bun install --frozen-lockfile
@@ -12,14 +12,14 @@ COPY frontend/ ./
 RUN bun run build
 
 # ---------- 后端构建 ----------
-FROM rust:1.96-bookworm AS backend-builder
+FROM docker.io/library/rust:1.96-bookworm AS backend-builder
 WORKDIR /app
 COPY Cargo.toml Cargo.lock ./
 COPY src/ ./src/
 RUN cargo build --release --locked
 
 # ---------- 运行镜像 ----------
-FROM debian:bookworm-slim
+FROM docker.io/library/debian:bookworm-slim
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
         ca-certificates \

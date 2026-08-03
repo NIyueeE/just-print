@@ -123,6 +123,8 @@ podman build -f Containerfile -t ghcr.io/niyueee/just-print:local .
 | `JUST_PRINT_TOKEN` | 无 | 准入令牌，建议 32 字节以上随机值；未配置或为空时服务拒绝启动（fail-closed，待后端实现后生效） |
 | `JUST_PRINT_ADDR` | `0.0.0.0:8080` | 后端监听地址；容器内直接对外监听，TLS 由云负载均衡 / Ingress / 反向代理终结 |
 | `JUST_PRINT_WEB_DIR` | `/usr/share/just-print/web` | 前端静态文件目录（镜像内已内置，一般无需修改） |
+| `JUST_PRINT_SYSFS_DIR` | `/sys/class/usb` | 设备发现扫描根目录；默认无需修改，测试/伪设备场景可指向临时目录 |
+| `JUST_PRINT_DEVICE_DIR` | `/dev/usb` | 打印机设备节点目录；默认无需修改，设备节点映射到其它路径时可调整 |
 
 ### TLS 与访问控制
 
@@ -175,7 +177,7 @@ just init-hooks
 
 任务与文件 id 仅存在于内存中：服务重启后均不再有效（请求返回 404），前端应提示「服务已重启，请重新上传」。
 
-> 当前后端为 HTTP 骨架：已提供 `/healthz` 与静态前端服务，以上 API 按开发路线逐步实现。
+以上 API 已实现（v1），详细契约见 [docs/api.md](docs/api.md)。
 
 ## 支持的上传格式
 
@@ -248,29 +250,29 @@ just init-hooks
 
 - [x] 交付形态：Containerfile（docker/podman）、GHCR 发布、compose 与 Quadlet 示例
 - [x] 后端 HTTP 骨架：静态前端 + `/healthz`
-- [ ] PJL 包装层
-  - [ ] 轮询 `/sys/class/usb/lp*` 发现设备（v1 固定 5 秒），读取 sysfs `product` / `manufacturer` / `serial`；默认选中第一台
-  - [ ] 以 sysfs `serial` 维护设备身份，缺失时回退 lp 节点路径
-  - [ ] 设备发现/热插拔时通过 PJL 查询能力并解析、缓存，仅保留实用参数：
+- [x] PJL 包装层
+  - [x] 轮询 `/sys/class/usb/lp*` 发现设备（v1 固定 5 秒），读取 sysfs `product` / `manufacturer` / `serial`；默认选中第一台
+  - [x] 以 sysfs `serial` 维护设备身份，缺失时回退 lp 节点路径
+  - [x] 设备发现/热插拔时通过 PJL 查询能力并解析、缓存，仅保留实用参数：
     - 双面打印与翻页：`DUPLEX`、`BINDING`
     - 省墨模式：`ECONOMODE`
     - 墨水浓度：`DENSITY`
     - 纸张类型：`MEDIATYPE`
     - 打印分辨率：`RESOLUTION`
-  - [ ] 严格校验 PDF 与控制信息，将 打印机名称 + 能力 传递给前端用于构建合法控制信息
-  - [ ] 执行打印（一个 PDF + 一个合法控制信息），会话带超时；失败或超时后，下次会话前先发送 UEL 复位
-- [ ] 中间层
-  - [ ] 上传文件分配唯一 id，调用容器内 LibreOffice 统一转换为 PDF；文件临时存储
-  - [ ] 预览：`GET /api/files/{id}` 直接返回 PDF，前端用浏览器查看器展示
-  - [ ] 每打印机 worker + FIFO 通道：提交顺序即执行顺序，失败标记并继续，设备移除时失败队列任务
-  - [ ] 实现 Bearer 令牌中间件（`JUST_PRINT_TOKEN`，常量时间比较，未配置或为空时拒绝启动）
-  - [ ] 提供 Web API：上传、预览、能力查询、提交打印、任务状态
-  - [ ] 临时文件清理（引用计数 + TTL）
-- [ ] 前端层（采用 Gruvbox 配色）
-  - [ ] 上传与预览
-  - [ ] 打印机选择与实用控制项
-  - [ ] 令牌输入与 `sessionStorage` 存储、401 处理
-  - [ ] 任务状态展示（含服务重启导致的 404 提示）
+  - [x] 严格校验 PDF 与控制信息，将 打印机名称 + 能力 传递给前端用于构建合法控制信息
+  - [x] 执行打印（一个 PDF + 一个合法控制信息），会话带超时；失败或超时后，下次会话前先发送 UEL 复位
+- [x] 中间层
+  - [x] 上传文件分配唯一 id，调用容器内 LibreOffice 统一转换为 PDF；文件临时存储
+  - [x] 预览：`GET /api/files/{id}` 直接返回 PDF，前端用浏览器查看器展示
+  - [x] 每打印机 worker + FIFO 通道：提交顺序即执行顺序，失败标记并继续，设备移除时失败队列任务
+  - [x] 实现 Bearer 令牌中间件（`JUST_PRINT_TOKEN`，常量时间比较，未配置或为空时拒绝启动）
+  - [x] 提供 Web API：上传、预览、能力查询、提交打印、任务状态
+  - [x] 临时文件清理（引用计数 + TTL）
+- [x] 前端层（采用 Gruvbox 配色）
+  - [x] 上传与预览
+  - [x] 打印机选择与实用控制项
+  - [x] 令牌输入与 `sessionStorage` 存储、401 处理
+  - [x] 任务状态展示（含服务重启导致的 404 提示）
 
 ## 设计约定
 
@@ -294,6 +296,7 @@ just init-hooks
 - 热插拔期间正在打印或排队中的任务会失败，需要用户重新提交。
 - 容器场景下 USB 热插拔依赖宿主 udev 与设备节点映射，能力有限。
 - 设备会话固定 60 秒超时可能中断超大打印任务，v1 暂不可配置；实现时需同时设计阻塞式设备写入的超时/取消机制。
+- 当前开发环境（WSL）没有真实打印机，PJL 会话与热插拔行为尚未在实体设备上验证；能力解析与字节流构造已有单元测试覆盖。
 
 ## 附录：PJL 打印字节流（设计约定）
 

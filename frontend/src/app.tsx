@@ -1,104 +1,86 @@
-import { useState } from 'preact/hooks'
-import preactLogo from './assets/preact.svg'
-import viteLogo from './assets/vite.svg'
-import heroImg from './assets/hero.png'
+import { useEffect, useState } from 'preact/hooks'
+import {
+  type UploadResult,
+  clearStoredToken,
+  getStoredToken,
+} from './api'
+import { TokenGate } from './components/TokenGate'
+import { Uploader } from './components/Uploader'
+import { PrinterPanel } from './components/PrinterPanel'
+import { JobList } from './components/JobList'
 import './app.css'
 
 export function App() {
-  const [count, setCount] = useState(0)
+  const [token, setToken] = useState<string>(() => getStoredToken())
+  const [upload, setUpload] = useState<UploadResult | null>(null)
+  const [jobIds, setJobIds] = useState<string[]>([])
+  const [notice, setNotice] = useState<string | null>(null)
+
+  useEffect(() => {
+    if (!notice) {
+      return
+    }
+    const timer = window.setTimeout(() => setNotice(null), 6000)
+    return () => window.clearTimeout(timer)
+  }, [notice])
+
+  function handleAuthFailure(): void {
+    clearStoredToken()
+    setToken('')
+    setUpload(null)
+    setJobIds([])
+    setNotice(null)
+  }
+
+  function handleUploaded(result: UploadResult): void {
+    setUpload(result)
+    setNotice(`文件「${result.name}」已转换完成`)
+  }
+
+  function handleUploadInvalid(): void {
+    setUpload(null)
+    setNotice('服务已重启，请重新上传')
+  }
+
+  if (!token) {
+    return <TokenGate onValid={(value) => setToken(value)} />
+  }
 
   return (
-    <>
-      <section id="center">
-        <div class="hero">
-          <img src={heroImg} class="base" width="170" height="179" alt="" />
-          <img src={preactLogo} class="framework" alt="Preact logo" />
-          <img src={viteLogo} class="vite" alt="Vite logo" />
+    <div class="app-shell">
+      <header class="app-header">
+        <div class="brand">
+          <h1>Just Print</h1>
+          <span class="tagline">轻量打印服务</span>
         </div>
-        <div>
-          <h1>Get started</h1>
-          <p>
-            Edit <code>src/app.tsx</code> and save to test <code>HMR</code>
-          </p>
-        </div>
-        <button
-          type="button"
-          class="counter"
-          onClick={() => setCount((count) => count + 1)}
-        >
-          Count is {count}
+        <button type="button" class="ghost" onClick={handleAuthFailure}>
+          退出登录
         </button>
-      </section>
-
-      <div class="ticks"></div>
-
-      <section id="next-steps">
-        <div id="docs">
-          <svg class="icon" role="presentation" aria-hidden="true">
-            <use href="/icons.svg#documentation-icon"></use>
-          </svg>
-          <h2>Documentation</h2>
-          <p>Your questions, answered</p>
-          <ul>
-            <li>
-              <a href="https://vite.dev/" target="_blank">
-                <img class="logo" src={viteLogo} alt="" />
-                Explore Vite
-              </a>
-            </li>
-            <li>
-              <a href="https://preactjs.com/" target="_blank">
-                <img class="button-icon" src={preactLogo} alt="" />
-                Learn more
-              </a>
-            </li>
-          </ul>
+      </header>
+      <main class="app-main">
+        <Uploader
+          onUploaded={handleUploaded}
+          onAuthFailure={handleAuthFailure}
+          onUploadInvalid={handleUploadInvalid}
+          onNotice={setNotice}
+        />
+        <PrinterPanel
+          upload={upload}
+          onJobSubmitted={(jobId) => setJobIds((previous) => [...previous, jobId])}
+          onAuthFailure={handleAuthFailure}
+          onNotice={setNotice}
+        />
+        <JobList
+          jobs={jobIds}
+          onAuthFailure={handleAuthFailure}
+          onRestart={handleUploadInvalid}
+        />
+      </main>
+      {notice ? (
+        <div class="notice" role="status">
+          {notice}
         </div>
-        <div id="social">
-          <svg class="icon" role="presentation" aria-hidden="true">
-            <use href="/icons.svg#social-icon"></use>
-          </svg>
-          <h2>Connect with us</h2>
-          <p>Join the Vite community</p>
-          <ul>
-            <li>
-              <a href="https://github.com/vitejs/vite" target="_blank">
-                <svg class="button-icon" role="presentation" aria-hidden="true">
-                  <use href="/icons.svg#github-icon"></use>
-                </svg>
-                GitHub
-              </a>
-            </li>
-            <li>
-              <a href="https://chat.vite.dev/" target="_blank">
-                <svg class="button-icon" role="presentation" aria-hidden="true">
-                  <use href="/icons.svg#discord-icon"></use>
-                </svg>
-                Discord
-              </a>
-            </li>
-            <li>
-              <a href="https://x.com/vite_js" target="_blank">
-                <svg class="button-icon" role="presentation" aria-hidden="true">
-                  <use href="/icons.svg#x-icon"></use>
-                </svg>
-                X.com
-              </a>
-            </li>
-            <li>
-              <a href="https://bsky.app/profile/vite.dev" target="_blank">
-                <svg class="button-icon" role="presentation" aria-hidden="true">
-                  <use href="/icons.svg#bluesky-icon"></use>
-                </svg>
-                Bluesky
-              </a>
-            </li>
-          </ul>
-        </div>
-      </section>
-
-      <div class="ticks"></div>
-      <section id="spacer"></section>
-    </>
+      ) : null}
+    </div>
   )
 }
