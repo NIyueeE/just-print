@@ -1,0 +1,22 @@
+# docker compose -f examples/compose.yaml up -d
+# podman-compose -f examples/compose.yaml up -d
+#
+# 镜像直接从 GitHub Container Registry 拉取。
+services:
+  just-print:
+    image: ghcr.io/niyueee/just-print:latest
+    container_name: just-print
+    restart: unless-stopped
+    ports:
+      - "${JUST_PRINT_HTTP_PORT:-8080}:8080"
+    environment:
+      JUST_PRINT_ADDR: "0.0.0.0:8080"
+      JUST_PRINT_WEB_DIR: "/usr/share/just-print/web"
+      # 必须显式提供令牌；未设置时为空值，后端按 fail-closed 拒绝启动，避免弱口令。
+      JUST_PRINT_TOKEN: "${JUST_PRINT_TOKEN}"
+    # 转换产生的临时文件放在内存文件系统，容器重启即清空。
+    tmpfs: /tmp
+    # 若宿主机有 USB 打印机，取消注释并把设备节点映射进容器：
+    # devices:
+    #   - /dev/usb/lp0:/dev/usb/lp0
+    #   - /dev/usb/lp1:/dev/usb/lp1

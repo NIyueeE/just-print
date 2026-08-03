@@ -1,0 +1,67 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    name: just check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - uses: oven-sh/setup-bun@v2
+      - name: Install just
+        uses: extractions/setup-just@v3
+      - name: Run full check chain
+        run: just check
+
+  image:
+    name: Build image and smoke test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+      - name: Build image (validation only)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Containerfile
+          push: false
+          load: true
+          tags: just-print:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+      - name: Smoke test (health, frontend, LibreOffice)
+        run: |
+          set -euo pipefail
+          cid="$(docker run -d --rm -p 127.0.0.1:8080:8080 -e JUST_PRINT_TOKEN=ci-smoke-test just-print:ci)"
+          trap 'docker rm -f "$cid" >/dev/null 2>&1 || true' EXIT
+          for _ in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:8080/healthz >/dev/null; then
+              break
+            fi
+            sleep 1
+          done
+          curl -fsS http://127.0.0.1:8080/healthz >/dev/null
+          curl -fsS http://127.0.0.1:8080/ | grep -q '<div id="app">'
+          docker exec "$cid" soffice --version
+          docker exec -w /tmp "$cid" sh -c \
+            'printf "hello" > sample.txt && soffice --headless --convert-to pdf --outdir /tmp /tmp/sample.txt >/dev/null && test -s /tmp/sample.pdf'
+
+  compose:
+    name: Validate compose example
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate compose file
+        run: docker compose -f examples/compose.yaml config --quiet

@@ -1,0 +1,12 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+repo_root="$(git rev-parse --show-toplevel)"
+cd "$repo_root"
+
+if ! command -v just >/dev/null 2>&1; then
+    printf '%s\n' "error: 'just' is not installed. See https://github.com/casey/just" >&2
+    exit 1
+fi
+
+exec just check

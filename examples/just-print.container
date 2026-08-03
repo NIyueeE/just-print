@@ -1,0 +1,36 @@
+# systemd Quadlet 示例（Podman >= 4.4）。
+#
+# 部署步骤：
+#   sudo mkdir -p /etc/containers/systemd /etc/just-print
+#   sudo cp examples/just-print.env.example /etc/just-print/just-print.env
+#   sudo chmod 600 /etc/just-print/just-print.env
+#   sudo cp examples/just-print.container /etc/containers/systemd/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now just-print.service
+#
+# 镜像直接从 GitHub Container Registry 拉取。
+
+[Unit]
+Description=Just Print service
+After=network-online.target
+Wants=network-online.target
+
+[Container]
+Image=ghcr.io/niyueee/just-print:latest
+ContainerName=just-print
+PublishPort=8080:8080
+Environment=JUST_PRINT_ADDR=0.0.0.0:8080
+Environment=JUST_PRINT_WEB_DIR=/usr/share/just-print/web
+EnvironmentFile=/etc/just-print/just-print.env
+Tmpfs=/tmp
+# 若宿主机有 USB 打印机，取消注释并映射设备节点：
+# Device=/dev/usb/lp0:/dev/usb/lp0
+AutoUpdate=registry
+Pull=newer
+
+[Service]
+Restart=on-failure
+TimeoutStartSec=300
+
+[Install]
+WantedBy=multi-user.target

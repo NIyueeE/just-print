@@ -1,0 +1,30 @@
+[package]
+name = "just-print"
+version = "0.1.0"
+edition = "2024"
+description = "A lightweight, dependency-free web service for printing documents via PJL"
+license = "MIT"
+repository = "https://github.com/NIyueeE/just-print"
+keywords = ["printing", "pjl", "pdf", "office", "web"]
+categories = ["command-line-utilities", "web-programming"]
+
+[dependencies]
+axum = "0.8.9"
+tokio = { version = "1.53", features = ["macros", "net", "rt-multi-thread"] }
+tower-http = { version = "0.6", features = ["fs"] }
+
+[lints.rust]
+unsafe_code = "forbid"
+missing_docs = "deny"
+non_ascii_idents = "forbid"
+warnings = "deny"
+
+[lints.clippy]
+all = { level = "deny", priority = -1 }
+pedantic = { level = "deny", priority = -1 }
+cargo = { level = "deny", priority = -1 }
+
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"
+indexing_slicing = "deny"
