@@ -8,24 +8,16 @@ use std::time::Duration;
 
 use thiserror::Error;
 
+use crate::cups::DEFAULT_CUPS_URI;
+
 /// 默认监听地址。
 pub const DEFAULT_ADDR: &str = "0.0.0.0:8080";
 /// 默认静态前端目录（镜像内置路径）。
 pub const DEFAULT_WEB_DIR: &str = "/usr/share/just-print/web";
-/// 默认 sysfs 设备发现根目录。
-pub const DEFAULT_SYSFS_ROOT: &str = "/sys/class/usb";
-/// `usblp` 在部分内核布局下注册到 `usbmisc` class；使用默认扫描根时与此目录一并扫描。
-pub const FALLBACK_SYSFS_ROOT: &str = "/sys/class/usbmisc";
-/// 默认设备节点目录。
-pub const DEFAULT_DEVICE_DIR: &str = "/dev/usb";
 /// 上传大小上限：64 MiB。
 pub const MAX_UPLOAD_BYTES: usize = 64 * 1024 * 1024;
 /// `LibreOffice` 转换超时。
 pub const CONVERSION_TIMEOUT: Duration = Duration::from_mins(2);
-/// 单次设备会话超时。
-pub const SESSION_TIMEOUT: Duration = Duration::from_mins(1);
-/// 设备发现轮询周期。
-pub const DISCOVERY_INTERVAL: Duration = Duration::from_secs(5);
 /// 临时文件清理周期。
 pub const CLEANUP_INTERVAL: Duration = Duration::from_mins(1);
 /// 无引用临时文件的保留时长。
@@ -38,20 +30,16 @@ pub struct Config {
     pub addr: SocketAddr,
     /// 静态前端目录。
     pub web_dir: PathBuf,
-    /// 设备发现使用的 sysfs 根目录。
-    pub sysfs_root: PathBuf,
-    /// 打印机设备节点目录。
-    pub device_dir: PathBuf,
     /// `Bearer` 准入令牌（已校验非空）。
     pub token: Arc<str>,
+    /// CUPS 服务地址（`host:port`，供 CUPS 命令行工具使用）。
+    pub cups_server: String,
+    /// CUPS 服务 scheme（`ipp` / `ipps`，供 IPP 查询使用）。
+    pub cups_scheme: String,
     /// 上传大小上限（字节）。
     pub max_upload_bytes: usize,
     /// `LibreOffice` 转换超时。
     pub conversion_timeout: Duration,
-    /// 单次设备会话超时。
-    pub session_timeout: Duration,
-    /// 设备发现轮询周期。
-    pub discovery_interval: Duration,
     /// 临时文件清理周期。
     pub cleanup_interval: Duration,
     /// 无引用临时文件保留时长。
@@ -63,7 +51,8 @@ impl Config {
     ///
     /// # Errors
     ///
-    /// 令牌缺失/为空，或 `JUST_PRINT_ADDR` 无法解析为 `SocketAddr` 时返回错误。
+    /// 令牌缺失/为空、`JUST_PRINT_ADDR` 无法解析为 `SocketAddr`，
+    /// 或 `JUST_PRINT_CUPS_URI` 不是合法的 `http(s)://host[:port]` 时返回错误。
     pub fn from_env() -> Result<Self, ConfigError> {
         let token = env::var("JUST_PRINT_TOKEN").map_err(|_| ConfigError::MissingToken)?;
         if token.trim().is_empty() {
@@ -76,26 +65,43 @@ impl Config {
         let web_dir = PathBuf::from(
             env::var("JUST_PRINT_WEB_DIR").unwrap_or_else(|_| DEFAULT_WEB_DIR.to_string()),
         );
-        let sysfs_root = PathBuf::from(
-            env::var("JUST_PRINT_SYSFS_DIR").unwrap_or_else(|_| DEFAULT_SYSFS_ROOT.to_string()),
-        );
-        let device_dir = PathBuf::from(
-            env::var("JUST_PRINT_DEVICE_DIR").unwrap_or_else(|_| DEFAULT_DEVICE_DIR.to_string()),
-        );
+        let cups_uri =
+            env::var("JUST_PRINT_CUPS_URI").unwrap_or_else(|_| DEFAULT_CUPS_URI.to_string());
+        let (cups_server, cups_scheme) =
+            parse_cups_uri(&cups_uri).map_err(ConfigError::InvalidCupsUri)?;
         Ok(Self {
             addr,
             web_dir,
-            sysfs_root,
-            device_dir,
             token: Arc::from(token),
+            cups_server,
+            cups_scheme,
             max_upload_bytes: MAX_UPLOAD_BYTES,
             conversion_timeout: CONVERSION_TIMEOUT,
-            session_timeout: SESSION_TIMEOUT,
-            discovery_interval: DISCOVERY_INTERVAL,
             cleanup_interval: CLEANUP_INTERVAL,
             temp_ttl: TEMP_TTL,
         })
     }
+}
+
+fn parse_cups_uri(uri: &str) -> Result<(String, String), String> {
+    let (rest, default_port, scheme) = if let Some(rest) = uri.strip_prefix("http://") {
+        (rest, "631", "ipp")
+    } else if let Some(rest) = uri.strip_prefix("https://") {
+        (rest, "632", "ipps")
+    } else {
+        return Err("仅支持 http:// 或 https://".to_string());
+    };
+    let (host, port) = match rest.rsplit_once(':') {
+        Some((host, port)) => (host.trim(), port.trim()),
+        None => (rest.trim(), default_port),
+    };
+    if host.is_empty() {
+        return Err("缺少主机名".to_string());
+    }
+    if !port.chars().all(|ch| ch.is_ascii_digit()) {
+        return Err("端口不是数字".to_string());
+    }
+    Ok((format!("{host}:{port}"), scheme.to_string()))
 }
 
 /// 配置加载错误。
@@ -107,4 +113,38 @@ pub enum ConfigError {
     /// 监听地址不合法。
     #[error("JUST_PRINT_ADDR 不是合法的 SocketAddr: {0}")]
     InvalidAddr(String),
+    /// CUPS 地址不合法。
+    #[error("JUST_PRINT_CUPS_URI 不合法: {0}")]
+    InvalidCupsUri(String),
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_cups_uri;
+
+    #[test]
+    fn parses_cups_uri_with_and_without_port() {
+        let result = parse_cups_uri("http://127.0.0.1:631");
+        assert!(result.is_ok());
+        let Ok((server, scheme)) = result else {
+            return;
+        };
+        assert_eq!(server, "127.0.0.1:631");
+        assert_eq!(scheme, "ipp");
+        let result = parse_cups_uri("http://cups.internal");
+        assert!(result.is_ok());
+        let Ok((server, scheme)) = result else {
+            return;
+        };
+        assert_eq!(server, "cups.internal:631");
+        assert_eq!(scheme, "ipp");
+        let result = parse_cups_uri("https://cups.internal:7443");
+        assert!(result.is_ok());
+        let Ok((server, scheme)) = result else {
+            return;
+        };
+        assert_eq!(server, "cups.internal:7443");
+        assert_eq!(scheme, "ipps");
+        assert!(parse_cups_uri("cups://localhost").is_err());
+    }
 }

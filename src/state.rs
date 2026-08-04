@@ -4,8 +4,9 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use crate::config::Config;
-use crate::registry::PrinterRegistry;
-use crate::store::{FileStore, JobStore};
+use crate::conversion::CONVERSION_SLOTS;
+use crate::cups::CupsClient;
+use crate::store::FileStore;
 use tokio::sync::Semaphore;
 
 /// 容器内临时目录；启动时清空上一次运行的残留文件。
@@ -43,10 +44,8 @@ pub struct AppState {
     pub config: Config,
     /// 文件存储（引用计数 + TTL）。
     pub files: Arc<FileStore>,
-    /// 任务存储（内存队列）。
-    pub jobs: Arc<JobStore>,
-    /// 打印机注册表与每打印机 worker。
-    pub printers: Arc<PrinterRegistry>,
+    /// CUPS 客户端（打印机枚举、选项、提交与任务查询）。
+    pub cups: CupsClient,
     /// 限制 `LibreOffice` 并发转换的信号量。
     pub conversion_slots: Arc<Semaphore>,
     /// 临时文件目录。
@@ -57,24 +56,11 @@ impl AppState {
     /// 组装共享状态。
     #[must_use]
     pub fn new(config: Config, temp_dir: PathBuf) -> Self {
-        let files = Arc::new(FileStore::default());
-        let jobs = Arc::new(JobStore::default());
-        let printers = Arc::new(PrinterRegistry::new(
-            Arc::clone(&jobs),
-            Arc::clone(&files),
-            config.session_timeout,
-            config.conversion_timeout,
-            config.discovery_interval,
-            config.sysfs_root.clone(),
-            config.device_dir.clone(),
-        ));
-        let conversion_slots = Arc::new(Semaphore::new(crate::conversion::CONVERSION_SLOTS));
         Self {
+            files: Arc::new(FileStore::default()),
+            cups: CupsClient::new(config.cups_server.clone(), config.cups_scheme.clone()),
+            conversion_slots: Arc::new(Semaphore::new(CONVERSION_SLOTS)),
             config,
-            files,
-            jobs,
-            printers,
-            conversion_slots,
             temp_dir,
         }
     }

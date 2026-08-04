@@ -18,8 +18,8 @@ pub enum AppError {
     /// 文件不存在或已失效。
     #[error("文件不存在或已失效，服务可能已重启，请重新上传")]
     FileNotFound,
-    /// 任务不存在或已失效。
-    #[error("任务不存在或已失效，服务可能已重启")]
+    /// 任务不存在或已被 CUPS 清理。
+    #[error("任务不存在或已失效（可能已被 CUPS 清理）")]
     JobNotFound,
     /// 打印机不存在。
     #[error("打印机不存在或已移除")]
@@ -42,6 +42,12 @@ pub enum AppError {
     /// 内部错误。
     #[error("内部错误: {0}")]
     Internal(String),
+}
+
+impl From<crate::cups::CupsError> for AppError {
+    fn from(error: crate::cups::CupsError) -> Self {
+        Self::Internal(format!("CUPS 不可用: {error}"))
+    }
 }
 
 impl AppError {
