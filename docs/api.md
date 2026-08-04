@@ -1,5 +1,8 @@
 # Just Print — Web API v1
 
+相关文档：[部署指南](deployment.md) · [架构与实现](architecture.md) ·
+[本地开发](development.md)
+
 除 `/healthz` 与静态前端外，所有接口都在 `/api` 前缀下，并且必须携带
 `Authorization: Bearer <token>`（`JUST_PRINT_TOKEN`）。未带令牌或令牌错误返回
 `401`；令牌未配置时服务拒绝启动（fail-closed）。

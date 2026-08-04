@@ -1,4 +1,5 @@
 # systemd Quadlet 示例（Podman >= 4.4）。
+# 完整部署说明见 docs/deployment.md。
 #
 # 部署步骤：
 #   sudo mkdir -p /etc/containers/systemd /etc/just-print
@@ -27,9 +28,10 @@ Tmpfs=/tmp
 # 可选：持久化 CUPS spool 与 cups-pdf 输出。
 # Volume=just-print-cups:/var/spool/cups
 # Volume=just-print-cups-pdf:/var/spool/cups-pdf
-# 若宿主机有 USB 打印机，取消注释并映射 /dev/usb 目录（自动包含所有 lp* 节点）；
-# 需要更小权限时也可只映射具体节点，例如 AddDevice=/dev/usb/lp0:/dev/usb/lp0
+# 若宿主机有 USB 打印机，取消注释并映射 CUPS usb 后端所需的设备目录：
+# AddDevice=/dev/bus/usb:/dev/bus/usb
 # AddDevice=/dev/usb:/dev/usb
+# 需要更小权限时也可只映射具体节点，例如 AddDevice=/dev/usb/lp0:/dev/usb/lp0
 AutoUpdate=registry
 Pull=newer
 
