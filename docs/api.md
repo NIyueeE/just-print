@@ -35,7 +35,7 @@
 
 `multipart/form-data`，字段名为 `file`，最大 64 MiB。
 
-支持扩展名（与镜像内置 LibreOffice 7.4.7 注册的 `IMPORT` 过滤器一致，共 171 个）：
+支持扩展名（与镜像内置 LibreOffice 7.4.7 注册的 `IMPORT` 过滤器一致，共 172 个）：
 `.123`、`.602`、`.abw`、`.bmp`、`.cdr`、`.cgm`、`.cmx`、`.csv`、`.cwk`、
 `.dbf`、`.dif`、`.doc`、`.docm`、`.docx`、`.dot`、`.dotm`、`.dotx`、`.dps`、
 `.dpt`、`.dxf`、`.emf`、`.emz`、`.eps`、`.et`、`.ett`、`.fb2`、`.fh`、`.fh1`、
@@ -50,7 +50,7 @@
 `.pptx`、`.psd`、`.psw`、`.pub`、`.qxd`、`.qxt`、`.ras`、`.rtf`、`.sda`、
 `.sdc`、`.sdd`、`.sdw`、`.slk`、`.stc`、`.std`、`.sti`、`.stw`、`.svg`、
 `.svgz`、`.svm`、`.sxc`、`.sxd`、`.sxg`、`.sxi`、`.sxs`、`.sxw`、`.sylk`、
-`.tab`、`.tga`、`.tif`、`.tiff`、`.tsv`、`.vdx`、`.vsd`、`.vsdm`、`.vsdx`、
+`.tab`、`.tga`、`.tif`、`.tiff`、`.tsv`、`.txt`、`.vdx`、`.vsd`、`.vsdm`、`.vsdx`、
 `.wb1`、`.wb2`、`.wdb`、`.webp`、`.wk1`、`.wk3`、`.wk4`、`.wks`、`.wmf`、
 `.wmz`、`.wn`、`.wpd`、`.wpg`、`.wps`、`.wpt`、`.wq1`、`.wq2`、`.wri`、
 `.xbm`、`.xhtml`、`.xlc`、`.xlk`、`.xlm`、`.xls`、`.xlsb`、`.xlsm`、`.xlsx`、

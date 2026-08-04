@@ -9,7 +9,7 @@ use thiserror::Error;
 use tokio::process::Command;
 
 /// 支持的上传扩展名（含镜像内 `LibreOffice` 可导入的全部格式与 Markdown）。
-pub const SUPPORTED_EXTENSIONS: [&str; 171] = [
+pub const SUPPORTED_EXTENSIONS: [&str; 172] = [
     "123", "602", "abw", "bmp", "cdr", "cgm", "cmx", "csv", "cwk", "dbf", "dif", "doc", "docm",
     "docx", "dot", "dotm", "dotx", "dps", "dpt", "dxf", "emf", "emz", "eps", "et", "ett", "fb2",
     "fh", "fh1", "fh10", "fh11", "fh2", "fh3", "fh4", "fh5", "fh6", "fh7", "fh8", "fh9", "fodg",
@@ -20,10 +20,10 @@ pub const SUPPORTED_EXTENSIONS: [&str; 171] = [
     "png", "pot", "potm", "potx", "ppm", "pps", "ppsx", "ppt", "pptm", "pptx", "psd", "psw", "pub",
     "qxd", "qxt", "ras", "rtf", "sda", "sdc", "sdd", "sdw", "slk", "stc", "std", "sti", "stw",
     "svg", "svgz", "svm", "sxc", "sxd", "sxg", "sxi", "sxs", "sxw", "sylk", "tab", "tga", "tif",
-    "tiff", "tsv", "vdx", "vsd", "vsdm", "vsdx", "wb1", "wb2", "wdb", "webp", "wk1", "wk3", "wk4",
-    "wks", "wmf", "wmz", "wn", "wpd", "wpg", "wps", "wpt", "wq1", "wq2", "wri", "xbm", "xhtml",
-    "xlc", "xlk", "xlm", "xls", "xlsb", "xlsm", "xlsx", "xlt", "xltm", "xltx", "xlw", "xml", "xpm",
-    "zabw", "zip", "zmf",
+    "tiff", "tsv", "txt", "vdx", "vsd", "vsdm", "vsdx", "wb1", "wb2", "wdb", "webp", "wk1", "wk3",
+    "wk4", "wks", "wmf", "wmz", "wn", "wpd", "wpg", "wps", "wpt", "wq1", "wq2", "wri", "xbm",
+    "xhtml", "xlc", "xlk", "xlm", "xls", "xlsb", "xlsm", "xlsx", "xlt", "xltm", "xltx", "xlw",
+    "xml", "xpm", "zabw", "zip", "zmf",
 ];
 
 /// `LibreOffice` 并发转换上限（`CPU` 密集操作）。
@@ -171,6 +171,7 @@ mod tests {
         assert!(SUPPORTED_EXTENSIONS.contains(&"csv"));
         assert!(SUPPORTED_EXTENSIONS.contains(&"html"));
         assert!(SUPPORTED_EXTENSIONS.contains(&"rtf"));
+        assert!(SUPPORTED_EXTENSIONS.contains(&"txt"));
         assert!(SUPPORTED_EXTENSIONS.contains(&"png"));
         assert!(SUPPORTED_EXTENSIONS.contains(&"jpg"));
         assert!(SUPPORTED_EXTENSIONS.contains(&"webp"));
