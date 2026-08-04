@@ -11,7 +11,7 @@ LibreOffice 与字体，上传的文档统一转换为 PDF 后交给 CUPS 打印
 
 - 单镜像交付：后端、前端、CUPS、LibreOffice 与字体一体。
 - 172 种 LibreOffice 可读格式统一转 PDF，并提供在线预览。
-- 打印机、队列与任务状态由 CUPS 管理，前端展示常见控制项。
+- 打印机、队列与任务状态由 CUPS 管理；USB 打印机可自动建队列，前端展示常见控制项。
 - Bearer 单令牌准入；未配置令牌时拒绝启动（fail-closed）。
 - 前端采用 Gruvbox 配色，提供上传、预览、控制项与任务状态展示。
 

@@ -23,6 +23,10 @@ PublishPort=8080:8080
 Environment=JUST_PRINT_ADDR=0.0.0.0:8080
 Environment=JUST_PRINT_WEB_DIR=/usr/share/just-print/web
 Environment=JUST_PRINT_CUPS_URI=http://127.0.0.1:631
+# 自动发现并添加 USB 打印机队列（默认开启；设为 0 关闭）。
+Environment=JUST_PRINT_AUTO_USB=1
+# 可选：固定自动添加 USB 打印机使用的 PPD；留空按型号匹配，找不到用通用 PCL。
+# Environment=JUST_PRINT_USB_PPD=drv:///sample.drv/generpcl.ppd
 EnvironmentFile=/etc/just-print/just-print.env
 Tmpfs=/tmp
 # 可选：持久化 CUPS spool 与 cups-pdf 输出。

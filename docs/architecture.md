@@ -74,6 +74,8 @@ just-print/
   的任务 id。
 - 状态查询通过 IPP `Get-Job-Attributes` 完成，映射为
   `queued` / `printing` / `completed` / `failed` / `canceled`。
+- 入口脚本默认在启动时自动枚举 USB 打印机（`JUST_PRINT_AUTO_USB=1`），按型号
+  匹配 PPD 并创建 CUPS 队列，找不到专用 PPD 时使用通用 PCL 兜底。
 - CUPS 侧的过滤、驱动与 PPD 决定最终打印语言（PDF、PostScript、PCL 或 raw），
   应用层不干预。
 

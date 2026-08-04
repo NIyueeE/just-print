@@ -21,6 +21,10 @@ services:
       JUST_PRINT_CUPS_PDF: "${JUST_PRINT_CUPS_PDF:-0}"
       # 设为 "1" 时启用 mDNS / Avahi 并自动发现 IPP Everywhere 打印机。
       JUST_PRINT_DISCOVER_IPP: "${JUST_PRINT_DISCOVER_IPP:-0}"
+      # 自动发现并添加 USB 打印机队列（默认开启；不需要可设为 "0"）。
+      JUST_PRINT_AUTO_USB: "${JUST_PRINT_AUTO_USB:-1}"
+      # 可选：固定自动添加 USB 打印机使用的 PPD；留空按型号匹配，找不到用通用 PCL。
+      JUST_PRINT_USB_PPD: "${JUST_PRINT_USB_PPD:-}"
     # 转换产生的临时文件放在内存文件系统，容器重启即清空。
     tmpfs: /tmp
     # 可选：持久化 CUPS spool 与 cups-pdf 输出（命名卷在下方声明）。

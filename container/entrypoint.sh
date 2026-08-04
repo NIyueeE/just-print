@@ -45,4 +45,62 @@ if [ "${JUST_PRINT_DISCOVER_IPP:-0}" = "1" ]; then
     2>/dev/null || true
 fi
 
+# 自动添加 USB 打印机队列（默认开启；JUST_PRINT_AUTO_USB=0 关闭）。
+# 需要容器映射 /dev/bus/usb 供 lpinfo 枚举；PPD 按型号匹配，找不到时使用
+# 通用 PCL 驱动，可通过 JUST_PRINT_USB_PPD 固定。
+auto_add_usb_printers() {
+  if [ "${JUST_PRINT_AUTO_USB:-1}" = "0" ]; then
+    return 0
+  fi
+
+  usb_uris="$(lpinfo -v 2>/dev/null | sed -n 's/^direct \(usb:\/\/.*\)$/\1/p' | sort -u)"
+  if [ -z "$usb_uris" ]; then
+    return 0
+  fi
+
+  ppd_list="$(lpinfo -m 2>/dev/null || true)"
+  default_ppd="${JUST_PRINT_USB_PPD:-drv:///sample.drv/generpcl.ppd}"
+
+  printf '%s\n' "$usb_uris" | while IFS= read -r uri; do
+    model="$(printf '%s' "$uri" |
+      sed -E 's#^usb://##; s#[?].*$##; s#.*/##; s#[^A-Za-z0-9]+#-#g; s#^-+##; s#-+$##' |
+      tr '[:upper:]' '[:lower:]')"
+    serial="$(printf '%s' "$uri" |
+      sed -n 's/.*[?&]serial=\([^&]*\).*/\1/p' |
+      tr '[:upper:]' '[:lower:]' |
+      sed 's/[^a-z0-9]//g')"
+
+    if [ -n "$model" ]; then
+      name="usb-${model}"
+      if [ -n "$serial" ]; then
+        name="${name}-${serial}"
+      fi
+    else
+      name="usb-printer"
+    fi
+
+    if lpstat -p "$name" >/dev/null 2>&1; then
+      echo "skip USB printer auto-add: $name 已存在"
+      continue
+    fi
+
+    ppd="$default_ppd"
+    if [ -z "${JUST_PRINT_USB_PPD:-}" ] && [ -n "$model" ]; then
+      pattern="$(printf '%s' "$model" | sed 's/-/[- ]/g')"
+      match="$(printf '%s\n' "$ppd_list" | grep -iE "$pattern" | head -n 1 || true)"
+      if [ -n "$match" ]; then
+        ppd="${match%% *}"
+      fi
+    fi
+
+    if lpadmin -p "$name" -E -v "$uri" -m "$ppd" >/dev/null 2>&1; then
+      echo "auto-added USB printer: $name ($uri, $ppd)"
+    else
+      echo "warning: failed to auto-add USB printer $name ($uri, $ppd)" >&2
+    fi
+  done
+}
+
+auto_add_usb_printers
+
 exec /usr/local/bin/just-print

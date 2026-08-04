@@ -59,6 +59,8 @@ sudo systemctl enable --now just-print.service
 | `JUST_PRINT_CUPS_URI` | `http://127.0.0.1:631` | 容器内 CUPS 服务地址；一般无需修改 |
 | `JUST_PRINT_CUPS_PDF` | `0` | 设为 `1` 时入口脚本自动添加 `CUPS-PDF` 调试打印机（cups-pdf，无真实打印机环境验证用） |
 | `JUST_PRINT_DISCOVER_IPP` | `0` | 设为 `1` 时启动 mDNS/Avahi，并用 `ippfind` 自动添加局域网 IPP Everywhere 打印机 |
+| `JUST_PRINT_AUTO_USB` | `1` | 启动时自动枚举 USB 打印机并创建 CUPS 队列；设为 `0` 关闭 |
+| `JUST_PRINT_USB_PPD` | 空 | 自动添加 USB 打印机时固定的 PPD；留空按型号匹配，找不到用通用 PCL |
 
 ## 打印机配置
 
@@ -70,6 +72,9 @@ CUPS 在容器启动时由入口脚本拉起，打印机可以通过以下任一
   PPD，例如 `lpadmin -p printer -E -v ipp://... -m /path/to/ppd`。
 - 调试：`JUST_PRINT_CUPS_PDF=1` 时入口脚本自动添加 `CUPS-PDF` 打印机，输出 PDF
   到容器内 `/var/spool/cups-pdf/<用户名>`，适合没有真实打印机的 WSL 环境。
+- USB 自动配置：默认开启（`JUST_PRINT_AUTO_USB=1`）。入口脚本启动时通过
+  `lpinfo` 枚举 USB 打印机，按型号匹配 PPD（找不到用通用 PCL），并自动创建
+  队列；已有同名队列会跳过。
 - 手动管理：进入容器后用 `lpadmin` / `lp` 自行管理。
 
 只有 CUPS 中可见的打印机会出现在 `/api/printers`；前端控制项来自 `lpoptions -l`
@@ -88,6 +93,7 @@ CUPS 在容器启动时由入口脚本拉起，打印机可以通过以下任一
 CUPS 的 `usb` 后端基于 libusb，容器需要映射 `/dev/bus/usb`；个别场景还需要
 `/dev/usb/lp*` 设备节点。Compose 与 Quadlet 示例中已给出注释模板。容器启动后
 新增的 USB 设备可能不会自动出现在映射中，通常需要按宿主机 udev 策略或重启容器。
+自动枚举依赖 `/dev/bus/usb` 已映射进容器。
 
 ## 临时文件
 
