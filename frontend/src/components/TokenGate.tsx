@@ -1,5 +1,6 @@
 import { useState } from 'preact/hooks'
 import { storeToken } from '../api'
+import { AlertIcon, KeyIcon, LockIcon, LogoMark } from '../icons'
 
 interface TokenGateProps {
   onValid: (token: string) => void
@@ -23,22 +24,36 @@ export function TokenGate({ onValid }: TokenGateProps) {
   return (
     <div class="token-gate">
       <form class="card token-card" onSubmit={handleSubmit}>
-        <h1>Just Print</h1>
-        <p class="muted">请输入访问令牌以使用打印服务</p>
-        <input
-          type="password"
-          value={value}
-          placeholder="JUST_PRINT_TOKEN"
-          autocomplete="off"
-          onInput={(event) => {
-            setValue((event.target as HTMLInputElement).value)
-            setError(null)
-          }}
-        />
-        <button type="submit" disabled={value.trim().length === 0}>
+        <div class="gate-logo">
+          <LogoMark size={76} />
+        </div>
+        <div>
+          <h1>Just Print</h1>
+          <p class="muted">请输入访问令牌以使用打印服务</p>
+        </div>
+        <label class="gate-input" aria-label="访问令牌">
+          <KeyIcon size={17} />
+          <input
+            type="password"
+            value={value}
+            placeholder="JUST_PRINT_TOKEN"
+            autocomplete="off"
+            onInput={(event) => {
+              setValue((event.target as HTMLInputElement).value)
+              setError(null)
+            }}
+          />
+        </label>
+        <button type="submit" class="primary" disabled={value.trim().length === 0}>
+          <LockIcon size={16} />
           进入
         </button>
-        {error ? <p class="error">{error}</p> : null}
+        {error ? (
+          <p class="error">
+            <AlertIcon size={15} />
+            {error}
+          </p>
+        ) : null}
       </form>
     </div>
   )

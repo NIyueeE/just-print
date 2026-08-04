@@ -5,6 +5,7 @@ import {
   getJob,
   isUnauthorized,
 } from '../api'
+import { AlertIcon, CheckIcon, ClockIcon, SpinnerIcon } from '../icons'
 
 interface JobListProps {
   jobs: string[]
@@ -15,6 +16,7 @@ interface JobListProps {
 interface JobView {
   status: JobStatus
   error: string | null
+  createdAtMs: number
 }
 
 const STATUS_LABEL: Record<JobStatus, string> = {
@@ -22,6 +24,13 @@ const STATUS_LABEL: Record<JobStatus, string> = {
   printing: '打印中',
   success: '成功',
   failed: '失败',
+}
+
+function formatTime(ms: number): string {
+  return new Date(ms).toLocaleTimeString('zh-CN', {
+    hour: '2-digit',
+    minute: '2-digit',
+  })
 }
 
 export function JobList({ jobs, onAuthFailure, onRestart }: JobListProps) {
@@ -48,7 +57,11 @@ export function JobList({ jobs, onAuthFailure, onRestart }: JobListProps) {
           }
           setViews((previous) => ({
             ...previous,
-            [id]: { status: job.status, error: job.error },
+            [id]: {
+              status: job.status,
+              error: job.error,
+              createdAtMs: job.created_at_ms,
+            },
           }))
           if (job.status === 'success' || job.status === 'failed') {
             finishedRef.current.add(id)
@@ -83,19 +96,48 @@ export function JobList({ jobs, onAuthFailure, onRestart }: JobListProps) {
   }
 
   return (
-    <section class="card jobs-section">
-      <h2>任务状态</h2>
+    <section class="card jobs-section card-jobs">
+      <div class="card-header">
+        <span class="card-icon">
+          <ClockIcon size={18} />
+        </span>
+        <h2>任务状态</h2>
+      </div>
       <ul class="jobs">
         {jobs.map((id) => {
           const view = views[id]
           const status: JobStatus = view?.status ?? 'queued'
           return (
             <li key={id} class={`job job-${status}`}>
-              <span class="job-id">{id.slice(0, 10)}…</span>
-              <span class={`badge badge-${status}`}>{STATUS_LABEL[status]}</span>
-              {status === 'failed' && view?.error ? (
-                <span class="job-error">{view.error}</span>
-              ) : null}
+              <span class={`job-icon job-icon-${status}`}>
+                {status === 'queued' ? (
+                  <ClockIcon size={16} />
+                ) : status === 'printing' ? (
+                  <SpinnerIcon size={16} />
+                ) : status === 'success' ? (
+                  <CheckIcon size={16} />
+                ) : (
+                  <AlertIcon size={16} />
+                )}
+              </span>
+              <div class="job-main">
+                <div class="job-topline">
+                  <span class="job-id">{id.slice(0, 10)}…</span>
+                  <span class={`badge badge-${status}`}>{STATUS_LABEL[status]}</span>
+                </div>
+                <span class="job-time">
+                  {view?.createdAtMs
+                    ? `${formatTime(view.createdAtMs)} 提交`
+                    : '等待状态更新…'}
+                </span>
+                {status === 'printing' ? <span class="job-progress" /> : null}
+                {status === 'failed' && view?.error ? (
+                  <span class="job-error">
+                    <AlertIcon size={13} />
+                    {view.error}
+                  </span>
+                ) : null}
+              </div>
             </li>
           )
         })}

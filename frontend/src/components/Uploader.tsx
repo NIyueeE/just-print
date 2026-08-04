@@ -7,6 +7,13 @@ import {
   isUnauthorized,
   uploadFile,
 } from '../api'
+import {
+  AlertIcon,
+  EyeIcon,
+  FileTextIcon,
+  SpinnerIcon,
+  UploadIcon,
+} from '../icons'
 
 interface UploaderProps {
   onUploaded: (upload: UploadResult) => void
@@ -104,12 +111,14 @@ export function Uploader({
   }
 
   return (
-    <section class="card">
-      <h2>上传文档</h2>
-      <p class="muted">
-        支持 PDF、DOCX、XLSX、PPTX、ODT、ODS、ODP、Markdown 与纯文本，将统一转换为
-        PDF 后打印。
-      </p>
+    <section class="card card-upload">
+      <div class="card-header">
+        <span class="card-icon">
+          <UploadIcon size={18} />
+        </span>
+        <h2>上传文档</h2>
+      </div>
+      <p class="muted">支持 PDF、DOCX、XLSX、PPTX、ODT、ODS、ODP、Markdown 与纯文本，将统一转换为 PDF 后打印。</p>
       <div
         class={`drop-zone${dragging ? ' dragging' : ''}`}
         onDragOver={(event) => {
@@ -140,11 +149,14 @@ export function Uploader({
             setError(null)
           }}
         />
+        <span class="drop-icon">
+          {file ? <FileTextIcon size={26} /> : <UploadIcon size={26} />}
+        </span>
         <label for="file-input" class="file-label">
           {file ? (
             <>
               <strong>{file.name}</strong>
-              <span class="muted">{formatSize(file.size)}</span>
+              <span class="muted">{formatSize(file.size)} · 点击或拖拽可更换</span>
             </>
           ) : (
             <>
@@ -159,21 +171,40 @@ export function Uploader({
           disabled={!file || busy}
           onClick={() => void handleUpload()}
         >
-          {busy ? '上传转换中…' : '上传并转换'}
+          {busy ? (
+            <>
+              <SpinnerIcon size={16} />
+              上传转换中…
+            </>
+          ) : (
+            <>
+              <UploadIcon size={16} />
+              上传并转换
+            </>
+          )}
         </button>
       </div>
-      {error ? <p class="error">{error}</p> : null}
+      {error ? (
+        <p class="error">
+          <AlertIcon size={15} />
+          {error}
+        </p>
+      ) : null}
       {upload && previewUrl ? (
         <div class="preview">
-          <h3>
-            预览：{upload.name}
+          <div class="preview-head">
+            <EyeIcon size={16} />
+            <h3>预览：{upload.name}</h3>
             <span class="muted">（{formatSize(upload.size)}）</span>
-          </h3>
+          </div>
           <iframe title="PDF 预览" src={previewUrl} />
         </div>
       ) : null}
       {upload && !previewUrl ? (
-        <p class="muted">预览加载中…</p>
+        <div class="preview-loading">
+          <SpinnerIcon size={15} />
+          <span>预览加载中…</span>
+        </div>
       ) : null}
     </section>
   )

@@ -9,6 +9,14 @@ import {
   listPrinters,
   submitPrint,
 } from '../api'
+import {
+  AlertIcon,
+  InfoIcon,
+  PrinterIcon,
+  RefreshIcon,
+  SendIcon,
+  SpinnerIcon,
+} from '../icons'
 
 interface PrinterPanelProps {
   upload: UploadResult | null
@@ -30,6 +38,15 @@ function defaultsFor(printer: Printer): Record<string, string> {
     }
   }
   return result
+}
+
+const CONTROL_LABELS: Record<string, string> = {
+  DUPLEX: '双面打印',
+  BINDING: '翻页装订',
+  ECONOMODE: '省墨模式',
+  DENSITY: '墨水浓度',
+  MEDIATYPE: '纸张类型',
+  RESOLUTION: '打印分辨率',
 }
 
 export function PrinterPanel({
@@ -179,16 +196,22 @@ export function PrinterPanel({
   }
 
   return (
-    <section class="card">
-      <h2>打印</h2>
+    <section class="card card-print">
+      <div class="card-header">
+        <span class="card-icon">
+          <PrinterIcon size={18} />
+        </span>
+        <h2>打印</h2>
+      </div>
       {printers.length === 0 ? (
-        <p class="muted">
-          未发现打印机。请确认设备已通过 /dev/usb/lp* 映射到容器，服务会每 5 秒自动重试。
-        </p>
+        <div class="hint">
+          <RefreshIcon size={15} className="refresh-spin" />
+          <span>未发现打印机。请确认设备已通过 /dev/usb/lp* 映射到容器，服务会每 5 秒自动重试。</span>
+        </div>
       ) : (
         <>
           <label class="field">
-            <span>打印机</span>
+            <span class="field-label">打印机</span>
             <select
               value={selectedId}
               onInput={(event) => selectPrinter((event.target as HTMLSelectElement).value)}
@@ -201,36 +224,72 @@ export function PrinterPanel({
               ))}
             </select>
           </label>
+          {selected ? (
+            <div class="printer-summary">
+              <span class="printer-name">{selected.name}</span>
+              {selected.manufacturer ? (
+                <span class="printer-detail">{selected.manufacturer}</span>
+              ) : null}
+              {selected.serial ? (
+                <span class="printer-detail">SN {selected.serial}</span>
+              ) : null}
+              {selected.pdf_supported ? (
+                <span class="lang-badge lang-pdf">PDF</span>
+              ) : null}
+              {selected.pcl_supported ? (
+                <span class="lang-badge lang-pcl">PCL</span>
+              ) : null}
+              {selected.postscript_supported ? (
+                <span class="lang-badge lang-ps">PostScript</span>
+              ) : null}
+            </div>
+          ) : null}
           {selected &&
           !selected.pdf_supported &&
           !selected.pcl_supported &&
           !selected.postscript_supported ? (
-            <p class="error">该打印机不支持 PDF / PCL / PostScript 输出，无法打印。</p>
+            <p class="error">
+              <AlertIcon size={15} />
+              该打印机不支持 PDF / PCL / PostScript 输出，无法打印。
+            </p>
           ) : null}
           {selected && !selected.pdf_supported && selected.pcl_supported ? (
-            <p class="muted">该打印机不支持 PDF，将使用 PCL 打印。</p>
+            <div class="hint">
+              <InfoIcon size={15} />
+              <span>该打印机不支持 PDF，将使用 PCL 打印。</span>
+            </div>
           ) : null}
           {selected &&
           !selected.pdf_supported &&
           !selected.pcl_supported &&
           selected.postscript_supported ? (
-            <p class="muted">该打印机不支持 PDF，将使用 PostScript 打印。</p>
+            <div class="hint">
+              <InfoIcon size={15} />
+              <span>该打印机不支持 PDF，将使用 PostScript 打印。</span>
+            </div>
           ) : null}
           {selected && selected.capabilities === null ? (
-            <p class="muted">打印机能力加载中…</p>
+            <div class="hint">
+              <SpinnerIcon size={15} />
+              <span>打印机能力加载中…</span>
+            </div>
           ) : null}
           {selected && selected.capabilities ? (
             <div class="controls">
               {Object.entries(selected.capabilities).map(([key, cap]) => (
                 <label class="field" key={key}>
-                  <span>{key}</span>
+                  <span class="field-label">{CONTROL_LABELS[key] ?? key}</span>
+                  <span class="field-name">{key}</span>
                   {renderControl(key, cap)}
                 </label>
               ))}
             </div>
           ) : null}
           {!upload ? (
-            <p class="hint">请先上传文档后再打印。</p>
+            <div class="hint">
+              <InfoIcon size={15} />
+              <span>请先上传文档后再打印。</span>
+            </div>
           ) : null}
           <button
             type="button"
@@ -238,11 +297,26 @@ export function PrinterPanel({
             disabled={!canPrint}
             onClick={() => void handlePrint()}
           >
-            {busy ? '提交中…' : '提交打印'}
+            {busy ? (
+              <>
+                <SpinnerIcon size={16} />
+                提交中…
+              </>
+            ) : (
+              <>
+                <SendIcon size={16} />
+                提交打印
+              </>
+            )}
           </button>
-          {error ? <p class="error">{error}</p> : null}
         </>
       )}
+      {error ? (
+        <p class="error">
+          <AlertIcon size={15} />
+          {error}
+        </p>
+      ) : null}
     </section>
   )
 }

@@ -8,6 +8,7 @@ import { TokenGate } from './components/TokenGate'
 import { Uploader } from './components/Uploader'
 import { PrinterPanel } from './components/PrinterPanel'
 import { JobList } from './components/JobList'
+import { CheckIcon, LogoMark, LogoutIcon } from './icons'
 import './app.css'
 
 export function App() {
@@ -50,10 +51,16 @@ export function App() {
     <div class="app-shell">
       <header class="app-header">
         <div class="brand">
-          <h1>Just Print</h1>
-          <span class="tagline">轻量打印服务</span>
+          <span class="brand-logo">
+            <LogoMark size={42} />
+          </span>
+          <div class="brand-text">
+            <h1>Just Print</h1>
+            <span class="tagline">轻量打印服务 · PJL 直连</span>
+          </div>
         </div>
         <button type="button" class="ghost" onClick={handleAuthFailure}>
+          <LogoutIcon size={16} />
           退出登录
         </button>
       </header>
@@ -78,6 +85,7 @@ export function App() {
       </main>
       {notice ? (
         <div class="notice" role="status">
+          <CheckIcon size={16} />
           {notice}
         </div>
       ) : null}
