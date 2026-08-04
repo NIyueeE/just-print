@@ -55,7 +55,8 @@ impl Config {
     /// 或 `JUST_PRINT_CUPS_URI` 不是合法的 `http(s)://host[:port]` 时返回错误。
     pub fn from_env() -> Result<Self, ConfigError> {
         let token = env::var("JUST_PRINT_TOKEN").map_err(|_| ConfigError::MissingToken)?;
-        if token.trim().is_empty() {
+        let token = token.trim();
+        if token.is_empty() {
             return Err(ConfigError::MissingToken);
         }
         let addr = env::var("JUST_PRINT_ADDR")

@@ -23,9 +23,10 @@ container:
 # 构建并以前台运行 cups-pdf 调试容器（需要 JUST_PRINT_TOKEN 环境变量）
 debug:
     just container
-    @test -n "$${JUST_PRINT_TOKEN:-}" || (echo "error: JUST_PRINT_TOKEN is required" >&2; exit 1)
+    @test -n "${JUST_PRINT_TOKEN:-}" || (echo "error: JUST_PRINT_TOKEN is required" >&2; exit 1)
+    @podman rm -f just-print-debug >/dev/null 2>&1 || true
     podman run --rm --name just-print-debug -p 8080:8080 \
-        -e JUST_PRINT_TOKEN="$$JUST_PRINT_TOKEN" \
+        -e JUST_PRINT_TOKEN="$JUST_PRINT_TOKEN" \
         -e JUST_PRINT_CUPS_PDF=1 \
         ghcr.io/niyueee/just-print:local
 
