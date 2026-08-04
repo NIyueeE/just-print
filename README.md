@@ -2,42 +2,35 @@
 
 ![CI](https://github.com/NIyueeE/just-print/actions/workflows/ci.yml/badge.svg)
 
-基于 Rust + Preact 构建的轻量打印机 Web 服务容器：容器内置 headless LibreOffice 将文档统一转换为 PDF，再通过 PJL 协议直接与 USB 打印机通信，不依赖 CUPS、驱动或其它系统组件。当前仅支持 Linux。
+基于 Rust + Preact 构建的打印机 Web 服务容器：容器内置 CUPS、headless LibreOffice 与字体，上传的文档统一转换为 PDF 后交给 CUPS 打印，不再自行实现 PJL 会话和设备队列。当前仅支持 Linux。
 
-> 交付与部署只提供容器形态：镜像同时包含后端、前端静态文件、LibreOffice 与字体，从 GitHub Container Registry（GHCR）拉取，兼容 Docker 与 Podman。
+> 交付与部署只提供容器形态：镜像同时包含后端、前端静态文件、CUPS、LibreOffice 与字体，从 GitHub Container Registry（GHCR）拉取，兼容 Docker 与 Podman。
 
 ## 特性
 
-- 通过轮询 `/sys/class/usb/lp*` 与 `/sys/class/usbmisc/lp*` 发现打印机（默认双根扫描并按设备节点去重，兼容不同内核布局，含热插拔），从 sysfs 获取简要名称与序列号；前端自动选中第一台可打印的打印机（支持 PDF / PCL / PostScript 任一语言）
-- 通过 PJL 查询打印机的完整能力，只暴露实用参数（双面/翻页、省墨、墨水浓度、纸张类型、打印分辨率等）
-- 打印语言自动选择：优先 PDF，其次 PCL（Ghostscript `ljet4` 转 PCL5e），再其次 PostScript；PCL 双面/翻页通过注入 PCL 指令控制
-- 上传常见工作文档（DOCX / XLSX / PPTX / ODT / ODS / ODP / Markdown / 纯文本 / PDF），由镜像内置的 headless LibreOffice 统一转换为 PDF 并提供预览
-- 同一台打印机的所有设备访问（打印 / 能力查询 / 复位）严格串行，任务按提交顺序 FIFO 执行
-- 单令牌准入（Bearer，常量时间比较，未配置令牌时 fail-closed 拒绝启动）：不区分用户、无会话；TLS 由云网关 / 反向代理终结
-- 前端采用 Gruvbox 配色，提供上传、预览、控制项和任务状态展示
-- 交付为单一 OCI 镜像（`ghcr.io/niyueee/just-print`），前端静态文件由后端从镜像内目录提供，不再内嵌进二进制
+- 通过 CUPS 管理打印机：支持 driverless IPP（IPP Everywhere）、USB 与网络打印机，具体能力取决于 CUPS 后端与镜像内置配置。
+- 只暴露 CUPS 提供的常见打印控制项（纸张、双面、打印质量、份数等），不再做自定义 PJL 能力查询，也不承诺适配仅支持私有 PJL 控制的老旧机型。
+- 上传常见工作文档（DOCX / XLSX / PPTX / ODT / ODS / ODP / Markdown / 纯文本 / PDF），由镜像内置 headless LibreOffice 统一转换为 PDF 并提供预览。
+- 打印任务由 CUPS 排队、执行与跟踪，API 只负责提交和查询状态。
+- 单令牌准入（Bearer，常量时间比较，未配置令牌时 fail-closed 拒绝启动）：不区分用户、无会话；TLS 由云网关 / 反向代理终结。
+- 前端采用 Gruvbox 配色，提供上传、预览、控制项和任务状态展示。
+- 交付为单一 OCI 镜像（`ghcr.io/niyueee/just-print`），前端静态文件由后端从镜像内目录提供。
 
 ## 架构
 
-三层结构，职责分离：
-
 ```mermaid
 flowchart LR
-    FE[前端 Preact] -->|上传文件 / 控制信息 / 状态轮询| API[中间层 Web API]
+    FE[前端 Preact] -->|上传文件 / 控制信息 / 状态轮询| API[Web API]
     API -->|文档转换| CVT[LibreOffice · soffice 子进程]
-    API -->|按打印机入队| W[每打印机 worker · FIFO 通道]
-    W --> PJL[PJL 包装层]
-    PJL -->|/dev/usb/lp*| PRT[USB 打印机]
-    DIS[设备发现] -->|轮询 sysfs lp* 条目| API
+    API -->|lp / lpstat / IPP| CUPS[CUPS]
+    CUPS -->|usb / ipp / socket / lpd 后端| PRINTER[打印机]
 ```
 
 | 层 | 职责 |
 | --- | --- |
-| PJL 包装层 | 轮询发现打印机、查询/解析/缓存 PJL 能力；只接收 PDF / PCL / PostScript + 合法控制信息，执行打印 |
-| 中间层 | 文件上传与临时存储、调用容器内 LibreOffice 转换为 PDF、预览、每打印机 worker 调度、Web API |
-| 前端层 | 上传文件、展示预览、构建控制信息、展示任务状态（Gruvbox 风格） |
-
-文档转换在容器内完成：镜像内置 `soffice --headless`（Writer / Calc / Impress 组件）、字体（`fonts-noto-cjk`、`fonts-liberation`）与 Ghostscript，中间层以子进程方式调用，字节/文件进、PDF 出；不支持 PDF 的打印机在打印时由 Ghostscript 将 PDF 转为 PCL 或 PostScript（按能力选择）。
+| Web API | 上传与临时存储、LibreOffice 转 PDF、打印机与选项枚举、任务提交和状态映射、Bearer 认证 |
+| CUPS | 打印机发现与配置、过滤、队列调度、后端传输、作业状态 |
+| 前端 | 上传文件、展示预览、构建 CUPS 选项、展示任务状态 |
 
 ## 目录结构
 
@@ -45,34 +38,27 @@ flowchart LR
 just-print/
 ├── Cargo.toml            # Rust 后端：axum + tokio + tower-http
 ├── src/
-│   ├── main.rs           # 后端入口：装配配置、后台任务与 HTTP 服务
+│   ├── main.rs           # 后端入口：装配配置、CUPS 客户端与 HTTP 服务
 │   ├── api/              # Web API：auth / files / printers / print / jobs
-│   ├── pjl/              # PJL 包装层：discover / capabilities / session
+│   ├── cups/             # CUPS 集成：打印机枚举、选项读取、提交与任务查询
 │   ├── config.rs         # 环境变量配置与 fail-closed 校验
-│   ├── conversion.rs     # LibreOffice 文档转 PDF（信号量限并发）
-│   ├── registry.rs       # 打印机注册表：轮询发现、热插拔 diff、worker 生命周期
-│   ├── workers.rs        # 每打印机 FIFO worker（打印/能力查询/复位串行）
-│   ├── store.rs          # 内存文件/任务存储：引用计数 + TTL 清理
-│   ├── ids.rs            # 进程内唯一 id（32 位十六进制）
+│   ├── conversion.rs     # LibreOffice 文档转 PDF
+│   ├── store.rs          # 临时文件与任务引用管理
 │   └── error.rs / state.rs
 ├── frontend/             # Preact + Vite + TypeScript 前端
 │   ├── package.json
-│   ├── vite.config.ts
 │   └── src/
 │       ├── api.ts              # API 封装与类型定义
 │       ├── app.tsx / main.tsx  # 主界面与入口
 │       ├── app.css / index.css # Gruvbox 配色与布局
 │       └── components/         # TokenGate / Uploader / PrinterPanel / JobList
 ├── docs/
-│   └── api.md           # Web API v1 详细契约（错误码、请求/响应示例）
-├── Containerfile         # 兼容 docker/podman 的多阶段镜像构建
-├── examples/
-│   ├── compose.yaml              # docker compose / podman-compose 示例
-│   ├── just-print.container      # systemd Quadlet 示例
-│   └── just-print.env.example    # Quadlet 环境文件示例
-├── .github/workflows/
-│   ├── ci.yml            # 检查链 + 镜像构建/冒烟测试 + compose 语法校验
-│   └── release.yml       # tag 触发，构建并推送 GHCR 镜像
+│   └── api.md           # Web API v1 详细契约
+├── Containerfile         # 多阶段镜像构建（含 CUPS、LibreOffice、Ghostscript、字体）
+├── container/
+│   └── entrypoint.sh     # 拉起 CUPS、可选配置 cups-pdf 调试打印机与 IPP 发现
+├── examples/             # compose / Quadlet / env 示例
+├── .github/workflows/    # CI 与发布
 └── README.md
 ```
 
@@ -91,6 +77,15 @@ docker run -d --name just-print -p 8080:8080 \
 
 # 或 Podman：
 podman run -d --name just-print -p 8080:8080 \
+  -e JUST_PRINT_TOKEN="$JUST_PRINT_TOKEN" \
+  ghcr.io/niyueee/just-print:latest
+```
+
+使用 USB 打印机时，需要将 USB 设备目录映射进容器：
+
+```bash
+docker run -d --name just-print -p 8080:8080 \
+  --device /dev/bus/usb:/dev/bus/usb \
   -e JUST_PRINT_TOKEN="$JUST_PRINT_TOKEN" \
   ghcr.io/niyueee/just-print:latest
 ```
@@ -121,10 +116,6 @@ sudo systemctl enable --now just-print.service
 
 ```bash
 just container
-
-# 或手动指定：
-docker build -f Containerfile -t ghcr.io/niyueee/just-print:local .
-podman build -f Containerfile -t ghcr.io/niyueee/just-print:local .
 ```
 
 ## 部署与配置
@@ -133,29 +124,33 @@ podman build -f Containerfile -t ghcr.io/niyueee/just-print:local .
 
 | 变量 | 默认值 | 说明 |
 | --- | --- | --- |
-| `JUST_PRINT_TOKEN` | 无 | 准入令牌，建议 32 字节以上随机值；未配置或为空时服务拒绝启动（fail-closed，已实现） |
+| `JUST_PRINT_TOKEN` | 无 | 准入令牌，建议 32 字节以上随机值；未配置或为空时服务拒绝启动（fail-closed） |
 | `JUST_PRINT_ADDR` | `0.0.0.0:8080` | 后端监听地址；容器内直接对外监听，TLS 由云负载均衡 / Ingress / 反向代理终结 |
 | `JUST_PRINT_WEB_DIR` | `/usr/share/just-print/web` | 前端静态文件目录（镜像内已内置，一般无需修改） |
-| `JUST_PRINT_SYSFS_DIR` | `/sys/class/usb` | 设备发现扫描根目录；默认同时扫描 `/sys/class/usbmisc`（usblp 在不同内核下的 class 布局）并按设备节点去重，显式设置后只扫描指定目录，测试/伪设备场景可指向临时目录 |
-| `JUST_PRINT_DEVICE_DIR` | `/dev/usb` | 打印机设备节点目录；默认无需修改，设备节点映射到其它路径时可调整 |
+| `JUST_PRINT_CUPS_URI` | `http://127.0.0.1:631` | 容器内 CUPS 服务地址；一般无需修改 |
+| `JUST_PRINT_CUPS_PDF` | `0` | 设为 `1` 时入口脚本自动添加 `CUPS-PDF` 调试打印机（cups-pdf，无真实打印机环境验证用） |
+| `JUST_PRINT_DISCOVER_IPP` | `0` | 设为 `1` 时启动 mDNS/Avahi，并用 `ippfind` 自动添加局域网 IPP Everywhere 打印机 |
+
+### 打印机配置
+
+CUPS 在容器启动时由入口脚本拉起，打印机可以通过以下任一方式配置：
+
+- 自动发现：使用 `ippfind` 发现局域网内的 IPP Everywhere 打印机，并以 `lpadmin -m everywhere` 添加。
+- 显式配置：挂载自定义 CUPS 配置，或进入容器后用 `lpadmin` 指定打印机 URI 与 PPD，例如 `lpadmin -p printer -E -v ipp://... -m /path/to/ppd`。
+- 调试：`JUST_PRINT_CUPS_PDF=1` 时入口脚本自动添加 `CUPS-PDF` 打印机，输出 PDF 到容器内 `/var/spool/cups-pdf/<用户名>`，适合没有真实打印机的 WSL 环境。
+- 手动管理：进入容器后用 `lpadmin` / `lp` 自行管理。
+
+只有 CUPS 中可见的打印机会出现在 `/api/printers`；前端控制项来自 `lpoptions -l` 与 IPP 属性，而不是 PJL 能力查询。
 
 ### TLS 与访问控制
 
 - 后端只提供 HTTP，证书在云网关（ALB / Ingress / Caddy / nginx 等）处终结，再转发到已发布的 8080 端口。
-- 除健康检查外，`/api/*` 请求必须携带 `Authorization: Bearer <token>`（已实现，常量时间比较）；不使用 Cookie 与会话，无 CSRF 问题。
-- 前端将令牌保存在 `sessionStorage`，收到 401 时回到令牌输入页。
+- 除健康检查外，`/api/*` 请求必须携带 `Authorization: Bearer <token>`（常量时间比较）；不使用 Cookie 与会话，无 CSRF 问题。
+- CUPS 默认只监听容器内部 `127.0.0.1:631`，不对外暴露。
 
-### USB 打印机透传
+### USB 设备透传
 
-宿主机需要 Linux 内核 `usblp` 模块，且 `/dev/usb/lp*` 设备节点对容器可见（通常属于 `lp` 组）。容器运行时需映射设备节点，推荐以目录方式映射整个 `/dev/usb`（自动包含全部 `lp*` 节点，新增打印机无需改部署配置）：
-
-- `docker run` / `podman run`：`--device /dev/usb:/dev/usb`
-- Compose：取消 [examples/compose.yaml](examples/compose.yaml) 中 `devices:` 注释（示例已改为目录映射）
-- Quadlet：取消 [examples/just-print.container](examples/just-print.container) 中 `Device=` 注释（示例已改为目录映射）
-
-需要最小权限时也可逐个映射具体节点：`--device /dev/usb/lp0:/dev/usb/lp0`。
-
-> 容器场景下热插拔能力有限：Docker 的目录映射是启动时快照，启动后新插入的设备节点需要宿主 udev 配合，重新创建/重启容器才能映射；Podman rootless 下目录为绑定挂载，新节点可直接出现，但仍受宿主机设备权限约束。
+CUPS 的 `usb` 后端基于 libusb，容器需要映射 `/dev/bus/usb`；个别场景还需要 `/dev/usb/lp*` 设备节点。容器启动后新增的 USB 设备可能不会自动出现在映射中，通常需要按宿主机 udev 策略或重启容器。
 
 ### 临时文件
 
@@ -169,6 +164,7 @@ podman build -f Containerfile -t ghcr.io/niyueee/just-print:local .
 - `just backend`：格式检查（fmt）+ 静态检查（clippy）+ 测试
 - `just frontend`：依赖校验（frozen-lockfile）+ 类型检查 + 生产构建
 - `just container`：用 podman 或 docker 构建本地镜像
+- `just debug`：构建并以 `JUST_PRINT_CUPS_PDF=1` 前台运行调试容器（需先设置 `JUST_PRINT_TOKEN`）
 
 首次克隆后执行一次以下命令，即可让每次 `git commit` 前自动运行 `just check`：
 
@@ -178,13 +174,7 @@ just init-hooks
 
 钩子脚本位于 `.githooks/pre-commit`，随仓库一起维护；检查失败时提交会被中止。
 
-### 测试覆盖
-
-- `cargo test`：29 个单元测试，覆盖 PJL 能力解析（含真实打印机样例）、sysfs 设备发现与多根合并去重、PDF→PCL / PostScript 转换、会话字节流（PDF / PCL / PostScript / 复位）与超时、PCL 双面指令映射、控制参数校验、PDF 校验与 id 生成。
-- CI（[.github/workflows/ci.yml](.github/workflows/ci.yml)）：完整检查链 + 镜像构建 + 容器冒烟测试（未带令牌 401、上传 txt 经 LibreOffice 转 PDF 并预览、缺失打印机 404）。
-- 无打印机环境可做伪设备全链路验证：`JUST_PRINT_SYSFS_DIR` 指向含 `lp0` 条目的伪 sysfs 目录、`JUST_PRINT_DEVICE_DIR` 指向含 FIFO 设备的目录，即可走通「发现 → 能力查询 → 打印」闭环。
-
-## Web API v1（已实现）
+## Web API v1
 
 最简 API；除健康检查外，所有接口都需要 Bearer 令牌：
 
@@ -192,17 +182,17 @@ just init-hooks
 | --- | --- | --- |
 | POST | `/api/files` | multipart 上传文件（字段 `file`），分配唯一 id 并转换为 PDF |
 | GET | `/api/files/{id}` | 获取转换后的预览 PDF |
-| GET | `/api/printers` | 获取打印机列表及合法控制信息 |
-| POST | `/api/print` | 提交文件 id + 控制信息，入队并返回任务 id |
-| GET | `/api/jobs/{id}` | 查询任务状态（排队中 / 打印中 / 成功 / 失败） |
+| GET | `/api/printers` | 获取 CUPS 打印机列表及 `lpoptions -l` 提供的合法控制项 |
+| POST | `/api/print` | 提交文件 id + CUPS 选项，返回 CUPS 任务 id |
+| GET | `/api/jobs/{id}` | 查询任务状态（queued / printing / completed / failed / canceled） |
 
-任务与文件 id 仅存在于内存中：服务重启后均不再有效（请求返回 404），前端应提示「服务已重启，请重新上传」。
+上传文件仅存在于内存与临时目录中：服务重启后需重新上传；已进入 CUPS 队列的任务由 CUPS 按自身规则保留或重试。
 
 所有错误响应统一为 `{"error": {"code": "...", "message": "..."}}`，完整契约见 [docs/api.md](docs/api.md)。
 
 ## 支持的上传格式
 
-中间层是格式的唯一入口：所有上传格式统一转换为 PDF 后，才交给 PJL 包装层。PJL 层感知 PDF / PCL / PostScript 字节流（按打印机能力选择语言）与合法控制信息，不感知原始格式。
+上传格式统一转换为 PDF 后提交给 CUPS；CUPS 根据驱动 / PPD 决定最终发送给打印机的语言（PDF、PostScript、PCL 或 raw）。
 
 | 格式 | 处理方式 |
 | --- | --- |
@@ -212,403 +202,47 @@ just init-hooks
 | `.md` / `.txt` | LibreOffice（soffice）转换为 PDF |
 | 其它（含 `.doc` / `.xls` / `.ppt`、`.html`、`.csv` 等） | 返回 415 |
 
-转换在容器内临时目录完成；转换失败返回 `conversion_failed`，并清理临时文件。
-
 ## 文档转换
 
 - 镜像内置 LibreOffice Writer / Calc / Impress 组件与 `fonts-noto-cjk`、`fonts-liberation`，无需在宿主机安装 LibreOffice。
-- 镜像内置 Ghostscript（`ps2write` / `ljet4`）：不支持 PDF personality 的打印机在打印时把 PDF 转换为 PCL 或 PostScript 后发送；转换在 worker 内串行执行，不占用上传转换的信号量。
-- 中间层通过 `soffice --headless --convert-to pdf` 子进程转换，用信号量限制并发转换数量（CPU 密集操作）。
-- 每个转换进程必须使用独立的用户配置目录（`-env:UserInstallation=file:///tmp/...`），仅靠信号量不足以避免并行 `soffice` 实例争用默认配置导致的锁冲突/偶发失败。
+- 中间层通过 `soffice --headless --convert-to pdf` 子进程转换，用信号量限制并发转换数量。
+- 每个转换进程使用独立的用户配置目录（`-env:UserInstallation=file:///tmp/...`），避免并行实例争用默认配置导致锁冲突。
 - 转换以容器内 LibreOffice 版本为准；与 Microsoft Office / WPS 的排版细节可能存在差异。
-- 临时文件清理采用「引用计数 + TTL」：打印成功且无任务引用后移除；一直未被任务引用且超时的文件也会被清理。
+- CUPS 侧的过滤、驱动与 PPD 决定最终打印输出，应用层不干预打印语言选择。
 
-## 并发与资源冲突处理
+## 队列与失败语义
 
-### 为什么按打印机排队，而不是全局队列
-
-- `/dev/usb/lp*` 是字符设备，PJL 是「设置参数 → 发送数据 → 结束」的有状态会话。多个任务并发写入同一设备会互相穿插，导致参数错乱或输出损坏，因此同一台打印机必须串行化。
-- 不同打印机之间没有资源冲突，可以并行；全局单队列会让空闲打印机不必要地等待。
-- 队列放在中间层：PJL 包装层保持「一次执行一个设备会话」的简单语义，不负责调度。
-
-### 每打印机 worker：互斥与顺序由结构保证
-
-- 每台打印机对应一个独立后台 worker 与 FIFO 通道（`mpsc`）。任务提交时把命令写入对应通道并立即返回任务 id；worker 一次只取一个命令执行，**同一台打印机同时只存在一个设备会话**。
-- 通道天然 FIFO：入队顺序即执行顺序。多客户端并发提交时，以服务端收到请求并登记的顺序为准。
-- 不同打印机各自独立 worker，互不阻塞，可并行执行。
-
-### 所有设备访问整体串行
-
-- 不只打印任务需要串行：能力查询、设备复位同样是 PJL 会话，必须走同一台打印机的 worker，否则会把查询字节穿插进打印数据流。
-- 能力查询是低频 init 操作：设备被发现/热插拔时入队执行并缓存，不随每次打印重复查询；空响应或缺少 `PERSONALITY` 的响应会在查询内自动重试，仍失败则随轮询周期重试，重试查询排在已排队的打印任务之后。
-- 查询失败不阻塞服务启动：设备先标记为「能力未知」，随轮询周期自动重试，成功后出现在打印机列表中。
-
-### 设备发现与热插拔
-
-- 设备发现只读 `/sys/class/usb/lp*` 与 `/sys/class/usbmisc/lp*`（默认双根扫描并按设备节点去重，部分内核把 usblp 注册到 usbmisc class），并从 sysfs 读取 `product` / `manufacturer` / `serial`——这些字段不在 lp 节点自身，需沿 `device` 符号链接向上定位到 USB 设备目录读取；不调用 `lsusb`，不依赖 usbutils / udev。
-- v1 固定每 5 秒轮询一次，与上次结果做 diff：新增设备 → 创建 worker 并查询能力；设备消失 → 失败相关任务并销毁 worker。
-- 设备身份优先使用 sysfs `serial`；序列号缺失时回退到 lp 节点路径（此时路径变化会被识别为新设备，记入日志）。
-
-### 失败、超时与复位
-
-- 单个任务失败：标记为失败并继续执行队列中的下一个任务，**不自动重试**——打印是物理动作，自动重试可能重复出纸；用户手动重试时，新任务排在队尾。
-- 设备会话带超时（v1 固定 60 秒，暂不可配置）：卡纸、离线等情况不能永久阻塞队列。
-- 对 `/dev/usb/lp*` 的写可能是阻塞式的（设备停止接收数据时）：会话已用非阻塞 fd（`AsyncFd`）+ 每步超时实现，写入/读取不会永久阻塞 worker，也不会只依赖 tokio 任务取消。
-- 超时或失败导致设备状态未知时，下一次会话开始前先发送 PJL UEL（`\x1B%-12345X`）复位，避免残留参数影响后续任务。
-- 打印过程中设备被拔走：正在打印的任务失败，该打印机队列中排队的所有任务也标记失败（原因：打印机已移除），worker 销毁；设备重新插入后按新发现处理并重新查询能力。
-
-### 其它并发控制
-
-- 文档转 PDF 是 CPU 密集操作，与打印机队列无关，用信号量限制并发转换数量。
-- 临时文件清理需要避免误删仍被引用的文件：采用「引用计数 + TTL」。
-- 打印任务入队后立即返回任务 id，前端通过轮询获取状态，避免长时间阻塞 HTTP 请求。
-
-### 重启与持久化行为
-
-- 服务运行在几乎不重启的本地环境：队列与任务状态保存在内存中，不做持久化。
-- 进程重启会丢失未完成的任务，启动时清理孤儿临时文件；重启后未完成任务与已上传文件全部作废，前端对任务/文件 404 统一提示「服务已重启，请重新上传」，不做 404 与 410 的区分。
-
-## 开发路线
-
-- [x] 交付形态：Containerfile（docker/podman）、GHCR 发布、compose 与 Quadlet 示例
-- [x] 后端 HTTP 骨架：静态前端 + `/healthz`
-- [x] PJL 包装层
-  - [x] 轮询 `/sys/class/usb/lp*` 与 `/sys/class/usbmisc/lp*` 发现设备（v1 固定 5 秒，默认双根扫描去重），读取 sysfs `product` / `manufacturer` / `serial`；前端默认选中第一台可用打印机
-  - [x] 以 sysfs `serial` 维护设备身份，缺失时回退 lp 节点路径
-  - [x] 设备发现/热插拔时通过 PJL 查询能力并解析、缓存，仅保留实用参数：
-    - 双面打印与翻页：`DUPLEX`、`BINDING`
-    - 省墨模式：`ECONOMODE`
-    - 墨水浓度：`DENSITY`
-    - 纸张类型：`MEDIATYPE`
-    - 打印分辨率：`RESOLUTION`
-  - [x] 严格校验 PDF / PCL / PostScript 与控制信息，将 打印机名称 + 能力 传递给前端用于构建合法控制信息
-  - [x] 执行打印（PDF / PCL / PostScript + 合法控制信息，按能力选择语言），会话带超时；失败或超时后，下次会话前先发送 UEL 复位
-  - [x] 打印语言选择：优先 PDF，其次 PCL，再其次 PostScript（Ghostscript 转换）
-- [x] 中间层
-  - [x] 上传文件分配唯一 id，调用容器内 LibreOffice 统一转换为 PDF；文件临时存储
-  - [x] 预览：`GET /api/files/{id}` 直接返回 PDF，前端用浏览器查看器展示
-  - [x] 每打印机 worker + FIFO 通道：提交顺序即执行顺序，失败标记并继续，设备移除时失败队列任务
-  - [x] 实现 Bearer 令牌中间件（`JUST_PRINT_TOKEN`，常量时间比较，未配置或为空时拒绝启动）
-  - [x] 提供 Web API：上传、预览、能力查询、提交打印、任务状态
-  - [x] 临时文件清理（引用计数 + TTL）
-- [x] 前端层（采用 Gruvbox 配色）
-  - [x] 上传与预览
-  - [x] 打印机选择与实用控制项
-  - [x] 令牌输入与 `sessionStorage` 存储、401 处理
-  - [x] 任务状态展示（含服务重启导致的 404 提示）
-- [x] 真机验证：Lenovo LJ4000D 上完成设备发现、PJL 能力解析、PCL 打印与双面控制验证；PDF 直发被该机型拒绝，PostScript 回退空白，最终以 PCL5e（Ghostscript `ljet4`）方案打通
+- 队列由 CUPS 管理：应用层不再实现每打印机 worker、FIFO 通道或设备会话互斥。
+- 打印机离线时，任务按 CUPS 策略排队或挂起；重试、取消与超时行为由 CUPS 配置决定。
+- 应用层不做自动重试，避免重复出纸；用户手动重试时通过 API 重新提交任务。
+- 服务重启后，已上传的临时文件会丢失；CUPS 已接收的任务按 CUPS spool 配置处理。
 
 ## 设计约定
 
-- 容器是唯一交付与部署方式：镜像内置后端、前端静态文件、LibreOffice 与字体；宿主机只需提供 Linux 内核 `usblp` 模块与设备节点权限。
-- 不使用 CUPS、`lp`/`lpr` 或打印机驱动，也不依赖宿主机安装 usbutils / udev / LibreOffice。
-- 打印机只接受 PDF / PCL / PostScript：中间层用 LibreOffice 将上传格式统一转换为 PDF；不支持 PDF 的打印机打印时由 Ghostscript 转为 PCL 或 PostScript，输出前严格校验。
+- CUPS 是唯一打印后端，不再自行实现 PJL 会话、设备发现或打印队列。
+- 只暴露 CUPS / PPD / IPP 提供的常见选项，不为仅支持私有 PJL 控制的老旧机型做特殊适配。
 - 单租户、无用户体系：准入仅依赖共享令牌 `JUST_PRINT_TOKEN`，不使用会话与 Cookie。
-- 传输安全由云网关 / 反向代理负责：后端仅提供 HTTP，容器内默认监听 `0.0.0.0:8080`。
-- 同一台打印机的所有设备访问（打印 / 能力查询 / 复位）严格串行，不同打印机可以并行。
-- 能力查询仅在设备发现/热插拔时执行并缓存，不在每次打印时重复查询；失败后随轮询周期自动重试。
-- 队列保存在内存中，重启后任务与临时文件作废；打印失败不自动重试，避免重复出纸。
+- 传输安全由云网关 / 反向代理负责；后端仅提供 HTTP。
+- 容器是唯一交付与部署方式，宿主机只需提供 Linux 与必要的 USB/网络设备权限。
 - 后端启用严格 lint：`unsafe_code`、`panic`、`unwrap_used`、`indexing_slicing` 均为 deny，clippy 全量 pedantic deny，`missing_docs` deny。
 
 ## 已知限制
 
 - 仅支持 Linux。
 - 仅支持「支持的上传格式」列出的格式；旧版二进制格式（`.doc` / `.xls` / `.ppt`）不在 v1 范围。
-- 文档转换以容器内 LibreOffice 为准，与 Microsoft Office / WPS 的排版可能存在差异。
-- 打印语言支持 PDF、PCL 与 PostScript：只声明 IBM / EPSON 等其它语言的打印机无法打印（前端会禁用）。
-- 第一版队列为内存队列，进程重启会丢失未完成任务。
-- 无序列号打印机的身份依赖设备节点路径，拔插后路径变化会被识别为新设备。
-- 热插拔期间正在打印或排队中的任务会失败，需要用户重新提交。
-- 容器场景下 USB 热插拔依赖宿主 udev 与设备节点映射，能力有限。
-- 设备会话固定 60 秒超时，超大打印任务可能被中断，v1 暂不可配置；阻塞式写入已通过非阻塞 fd + 每步超时规避。
-- 真机验证结论（Lenovo LJ4000D）：发现、能力解析、PCL 打印与双面控制正常；该机型拒绝 PDF 直发（打印错误页）、对 `@PJL ENTER LANGUAGE=PCL` 敏感（空白页/卡在接收数据）、非阻塞写后立即关闭会丢数据（已用 2 秒排空解决）。其它机型仍需实机确认。
+- 打印机兼容性取决于 CUPS 后端、驱动与 PPD；不支持 IPP Everywhere 且没有可用 PPD 的老式打印机可能无法提供控制项，或只能 raw 打印。
+- 控制项仅限 CUPS 提供的常见选项，不再查询或透传打印机私有 PJL 变量（如省墨、墨浓度等）。
+- 容器内 USB 热插拔能力有限，新增设备通常需要宿主 udev 配合或重启容器。
+- CUPS 及依赖会显著增加镜像体积，并引入 cupsd、D-Bus、Avahi 等常驻组件。
+- 局域网打印机自动发现依赖容器内 mDNS / Avahi 配置。
 
-## 附录：PJL 打印字节流（设计约定）
-
-PDF / PostScript 会话按以下字节序列发送到 `/dev/usb/lp*`：
-
-```text
-\x1B%-12345X                      # UEL：进入 PJL 模式
-@PJL SET DUPLEX=ON\r\n           # 控制信息，按能力查询结果生成
-@PJL SET BINDING=LONGEDGE\r\n
-@PJL ENTER LANGUAGE=PDF\r\n      # 切换到打印语言（PDF 或 POSTSCRIPT；PCL 见下文）
-<PDF 或 PostScript 字节流>
-\x1B%-12345X                      # UEL：结束会话 / 复位
-```
-
-PCL 打印不发送 `@PJL ENTER LANGUAGE=PCL`：部分打印机对该指令敏感（空白页或
-卡在「接收数据」），真机验证的正确方式是设置完控制项后退出 PJL，再直接发送
-原始 PCL 数据流：
-
-```text
-\x1B%-12345X                      # UEL：进入 PJL 模式
-@PJL SET DUPLEX=ON\r\n           # 控制信息，按能力查询结果生成
-\x1B%-12345X                      # UEL：退出 PJL，回到打印机默认语言
-<PCL 原始字节流>
-```
-
-双面控制不走 PJL：部分打印机忽略 PJL `DUPLEX` 设置，改为在 PCL 数据开头注入
-`ESC&l#S`（`0S` 单面 / `1S` 长边双面 / `2S` 短边双面）；同时剥掉 Ghostscript
-输出开头的 `ESC E`（打印机复位），避免其重置控制设置。
-
-约定（由 `src/pjl/session.rs` 实现）：
-
-- 控制信息只允许使用能力查询返回的合法值；未查询到对应能力时不下发该参数。
-- 打印语言以 `PERSONALITY` 为准：能力查询会解析 `PERSONALITY`，含 `PDF` 时直接发送 PDF；不含 `PDF` 但含 `PCL` 时由 Ghostscript（`ljet4`）转为 PCL5e 发送；再不含 `PCL` 但含 `POSTSCRIPT` 时转为 PostScript 发送；三者都不含时标记为不可用并在前端提示并禁用打印。`PERSONALITY` 缺失视为能力未完整加载（响应可能被截断），查询会重试，取得前不假定语言、不发送数据。
-- 非阻塞写入返回后数据可能仍在 USB 传输中：会话保持打开约 2 秒排空后再关闭（真机验证：立即关闭会导致打印机不出纸）。
-- 能力查询、打印、复位都是完整 PJL 会话，必须由同一台打印机的 worker 串行执行。
-
-## 附录：PJL 能力查询参考
+## 附录：常用 CUPS 命令
 
 ```bash
-printf "\x1B%%-12345X@PJL\r\n@PJL INFO VARIABLES\r\n\x1B%%-12345X" > /dev/usb/lp0
-timeout 2 cat /dev/usb/lp0
-```
-
-示例输出（节选自真实打印机）：
-
-```text
-PORTRAIT
-        LANDSCAPE
-LPARM:IBM ORIENTATION=PORTRAIT [2 ENUMERATED]
-        PORTRAIT
-        LANDSCAPE
-LPARM:EPSON ORIENTATION=PORTRAIT [2 ENUMERATED]
-        PORTRAIT
-        LANDSCAPE
-LPARM:POSTSCRIPT ORIENTATION=PORTRAIT [2 ENUMERATED]
-        PORTRAIT
-        LANDSCAPE
-LPARM:PCL FORMLINES=64 [2 RANGE]
-        5
-        128
-LPARM:IBM FORMLINES=66 [2 RANGE]
-        5
-        128
-LPARM:EPSON FORMLINES=66 [2 RANGE]
-        5
-        128
-MANUALFEED=OFF [2 ENUMERATED]
-        OFF
-        ON
-RESOLUTION=600 [6 ENUMERATED]
-        300
-        600
-        900
-        1200
-        HQ1200
-        TR1200
-PERSONALITY=LABEL [5 ENUMERATED]
-        PCL
-        IBM
-        EPSON
-        POSTSCRIPT
-        AUTO
-AUTOCONT=ON [2 ENUMERATED]
-        OFF
-        ON
-PASSWORD=DISABLED [2 RANGE]
-        0
-        65535
-MEDIATYPE=REGULAR [14 ENUMERATED]
-        REGULAR
-        THICK
-        THICK2
-        THIN
-        RECYCLED
-        BOND
-        ENVELOPES
-        ENVTHICK
-        ENVTHIN
-        LABEL
-        GLOSSY
-        COLOR
-        LETTERHEAD
-        PREPUNCHED
-ECONOMODE=ON [2 ENUMERATED]
-        OFF
-        ON
-IMAGEADAPT=OFF [3 ENUMERATED]
-        OFF
-        ON
-        AUTO
-LPARM:PCL FONTSOURCE=I [1 ENUMERATED]
-        I
-LPARM:IBM FONTSOURCE=I [1 ENUMERATED]
-        I
-LPARM:EPSON FONTSOURCE=I [1 ENUMERATED]
-        I
-LPARM:PCL FONTNUMBER=97 [2 RANGE]
-        0
-        109
-LPARM:IBM FONTNUMBER=97 [2 RANGE]
-        0
-        109
-LPARM:EPSON FONTNUMBER=97 [2 RANGE]
-        0
-        109
-LPARM:PCL PITCH=10.00 [2 RANGE]
-        0.44
-        99.99
-LPARM:IBM PITCH=10.00 [2 RANGE]
-        0.44
-        99.99
-LPARM:EPSON PITCH=10.00 [2 RANGE]
-        0.44
-        99.99
-LPARM:PCL PTSIZE=12.00 [2 RANGE]
-        4.00
-        999.75
-LPARM:IBM PTSIZE=12.00 [2 RANGE]
-        4.00
-        999.75
-LPARM:EPSON PTSIZE=12.00 [2 RANGE]
-        4.00
-        999.75
-DENSITY=0 [2 RANGE]
-        -6
-        6
-HOLDKEY=0 [2 RANGE]
-        0
-        9999
-RESOLUTIONX=600 [2 RANGE]
-        300
-        1200
-RESOLUTIONY=600 [2 RANGE]
-        300
-        1200
-CONTEXTSWITCH=ON [2 ENUMERATED]
-        OFF
-        ON
-BINDING=LONGEDGE [2 ENUMERATED]
-        LONGEDGE
-        SHORTEDGE
-DOWNFPROD=OFF [2 ENUMERATED]
-        OFF
-        ON
-HOLD=OFF [3 ENUMERATED]
-        OFF
-        PROOF
-        STORE
-HOLDTYPE=PUBLIC [2 ENUMERATED]
-        PUBLIC
-        PRIVATE
-DUPLEX=OFF [2 ENUMERATED]
-        OFF
-        ON
-INTRAY1=UNLOCKED [2 ENUMERATED]
-        UNLOCKED
-        LOCKED
-INTRAY2=UNLOCKED [2 ENUMERATED]
-        UNLOCKED
-        LOCKED
-PRINTQUALITY=NORMAL [3 ENUMERATED]
-        NORMAL
-        DRAFT
-        HIGH
-LPARM:PCL SYMSET=PC8 [80 ENUMERATED]
-        PC8
-        PC8DN
-        PC850
-        PC852
-        PC8TK
-        PC1004
-        WINL1
-        WINL2
-        WINL5
-        WINBALT
-        DESKTOP
-        PSTEXT
-        VNINTL
-        VNUS
-        MSPUBL
-        MATH8
-        PSMATH
-        VNMATH
-        PIFONT
-        LEGAL
-        ISO2
-        ISO4
-        ISO6
-        ISO10
-        ISO11
-        ISO15
-        ISO16
-        ISO17
-        ISO21
-        ISO25
-        ISO57
-        ISO60
-        ISO61
-        ISO69
-        ISO84
-        ISO85
-        WIN30
-        HPGERM
-        HPSPAN
-        MCTEXT
-        SYMBOL
-        OCRA
-        OCRB
-        WDINGS
-        HEBREW7
-        ROMAN8
-        ISOL1
-        ISOL2
-        ISOL5
-        ISOL6
-        PC775
-        ABIBP
-        ABIINTL
-        RUSSIAN
-        UKRAINIAN
-        PC866
-        PC8LG
-        PC851
-        WINGREEK
-        ISOLC
-        ISOGREEK
-        PC853
-        PC857
-        PC858
-        PC860
-        PC861
-        PC863
-        PC869
-        ISOL9
-        PC8B
-        PC8G
-        PC8PC
-        GREEK8
-        TURKISH8
-        ROMAN9
-        ROMANEXT
-        WINC
-LPARM:IBM SYMSET=PC8 [8 ENUMERATED]
-        PC8
-        PC8DN
-        PC850
-        PC852
-        PC860
-        PC863
-        PC865
-        PC8TK
-LPARM:EPSON SYMSET=USASCII [23 ENUMERATED]
-        USASCII
-        GERMAN
-        UKASCII1
-        FRENCH1
-        ITALY
-        SPANISH
-        SWEDISH
-        JAPANESE
-        NORWEGIAN
-        DANISH1
-        DANISH2
-        UKASCII2
-        FRENCH2
-        DUTCH
-        SOUTHAFRICAN
-        PC8
-        PC8
+lpstat -p -l                                   # 查看打印机与状态
+lpoptions -p PRINTER -l                        # 查看可用选项及合法值
+lp -d PRINTER -o media=A4 -o sides=two-sided-long-edge file.pdf
+lpstat -W not-completed -o PRINTER             # 查看未完成任务
+cancel JOB_ID                                  # 取消任务
+ippfind                                        # 发现 IPP Everywhere 打印机
 ```

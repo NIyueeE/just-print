@@ -12,12 +12,27 @@ services:
     environment:
       JUST_PRINT_ADDR: "0.0.0.0:8080"
       JUST_PRINT_WEB_DIR: "/usr/share/just-print/web"
+      # 容器内 CUPS 服务地址；一般无需修改。
+      JUST_PRINT_CUPS_URI: "http://127.0.0.1:631"
       # 必须显式提供令牌；未设置时为空值，后端按 fail-closed 拒绝启动，避免弱口令。
       JUST_PRINT_TOKEN: "${JUST_PRINT_TOKEN}"
+      # 无真实打印机调试：设为 "1" 时入口脚本自动添加 CUPS-PDF 调试打印机。
+      JUST_PRINT_CUPS_PDF: "${JUST_PRINT_CUPS_PDF:-0}"
+      # 设为 "1" 时启用 mDNS / Avahi 并自动发现 IPP Everywhere 打印机。
+      JUST_PRINT_DISCOVER_IPP: "${JUST_PRINT_DISCOVER_IPP:-0}"
     # 转换产生的临时文件放在内存文件系统，容器重启即清空。
     tmpfs: /tmp
+    # 可选：持久化 CUPS spool 与 cups-pdf 输出（命名卷在下方声明）。
+    # volumes:
+    #   - just-print-cups:/var/spool/cups
+    #   - just-print-cups-pdf:/var/spool/cups-pdf
     # 若宿主机有 USB 打印机，取消注释并以目录方式映射整个 /dev/usb（自动包含所有 lp* 节点）：
     # devices:
     #   - /dev/usb:/dev/usb
     # 需要更小权限时也可只映射具体节点，例如：
     #   - /dev/usb/lp0:/dev/usb/lp0
+
+# 仅在使用上方持久化卷注释时启用。
+# volumes:
+#   just-print-cups:
+#   just-print-cups-pdf:

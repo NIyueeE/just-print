@@ -22,8 +22,14 @@ RUN cargo build --release --locked
 FROM docker.io/library/debian:bookworm-slim
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
+        avahi-daemon \
         ca-certificates \
+        cups \
+        cups-client \
+        cups-filters \
+        cups-pdf \
         curl \
+        dbus \
         fonts-liberation \
         fonts-noto-cjk \
         ghostscript \
@@ -32,15 +38,17 @@ RUN apt-get update \
         libreoffice-impress \
     && rm -rf /var/lib/apt/lists/*
 
-# 后端负责提供 API 与静态前端；前端产物直接放在镜像内，不再嵌入二进制。
+# 后端提供 API 与静态前端；入口脚本负责拉起 CUPS 并可选配置调试/发现打印机。
+COPY --chmod=0755 container/entrypoint.sh /usr/local/bin/just-print-entrypoint
 COPY --from=backend-builder /app/target/release/just-print /usr/local/bin/just-print
 COPY --from=frontend-builder /app/frontend/dist /usr/share/just-print/web
 
 ENV JUST_PRINT_ADDR=0.0.0.0:8080
 ENV JUST_PRINT_WEB_DIR=/usr/share/just-print/web
+ENV JUST_PRINT_CUPS_URI=http://127.0.0.1:631
 EXPOSE 8080
 
-HEALTHCHECK --interval=30s --timeout=3s --start-period=10s --retries=3 \
-    CMD curl -fsS http://127.0.0.1:8080/healthz >/dev/null || exit 1
+HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
+    CMD sh -c 'curl -fsS http://127.0.0.1:8080/healthz >/dev/null && lpstat -r 2>/dev/null | grep -q "scheduler is running"'
 
-ENTRYPOINT ["/usr/local/bin/just-print"]
+ENTRYPOINT ["/usr/local/bin/just-print-entrypoint"]
