@@ -24,8 +24,8 @@ Environment=JUST_PRINT_WEB_DIR=/usr/share/just-print/web
 EnvironmentFile=/etc/just-print/just-print.env
 Tmpfs=/tmp
 # 若宿主机有 USB 打印机，取消注释并映射 /dev/usb 目录（自动包含所有 lp* 节点）；
-# 需要更小权限时也可只映射具体节点，例如 Device=/dev/usb/lp0:/dev/usb/lp0
-# Device=/dev/usb:/dev/usb
+# 需要更小权限时也可只映射具体节点，例如 AddDevice=/dev/usb/lp0:/dev/usb/lp0
+# AddDevice=/dev/usb:/dev/usb
 AutoUpdate=registry
 Pull=newer
 
