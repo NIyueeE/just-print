@@ -27,7 +27,7 @@
 | `unsupported_media_type` | 415 | 上传格式不在支持列表 |
 | `payload_too_large` | 413 | 上传超过大小限制 |
 | `conversion_failed` | 422 | LibreOffice 转换失败 |
-| `printer_unavailable` | 409 | 打印机不存在、不支持 PDF 或未就绪 |
+| `printer_unavailable` | 409 | 打印机不存在、不支持 PDF / PCL / PostScript、语言能力未完整加载或未就绪 |
 | `invalid_controls` | 400 | 控制信息不是能力查询返回的合法值 |
 | `internal` | 500 | 内部错误 |
 
@@ -69,6 +69,8 @@
       "manufacturer": "HP",
       "serial": "CN12345678",
       "pdf_supported": true,
+      "postscript_supported": false,
+      "pcl_supported": true,
       "capabilities": {
         "DUPLEX": {
           "default": "OFF",
@@ -93,11 +95,13 @@
 ```
 
 - `capabilities` 为 `null` 表示能力尚未查询到（查询失败会在后台自动重试）。
-- `pdf_supported` 仅在能力已知时有意义：PJL `PERSONALITY` 不含 `PDF` 的打印机
-  会显示为 `false`，提交打印将被拒绝。
+- `pdf_supported` / `pcl_supported` / `postscript_supported` 仅在能力已知时有意义：
+  PJL `PERSONALITY` 含 `PDF` 时 `pdf_supported` 为 `true`；不含 PDF 时按
+  `PCL` → `POSTSCRIPT` 顺序回退（打印前由 Ghostscript 转换），三者都不支持时
+  提交打印将被拒绝。`PERSONALITY` 缺失视为能力未完整加载（响应可能被截断），
+  查询会在后台重试，取得前提交打印同样被拒绝。
 - 能力字段只暴露实用参数：`DUPLEX`、`BINDING`、`ECONOMODE`、`DENSITY`、
-  `MEDIATYPE`、`RESOLUTION`；`PERSONALITY` 仅用于判断 `pdf_supported`，不暴露给
-  前端。
+  `MEDIATYPE`、`RESOLUTION`；`PERSONALITY` 仅用于判断语言支持，不暴露给前端。
 
 ## POST /api/print
 
@@ -126,7 +130,14 @@
 ```
 
 失败：`404 not_found`（文件或打印机不存在）、`409 printer_unavailable`
-（不支持 PDF / 能力未知 / 打印机已移除）、`400 invalid_controls`。
+（不支持 PDF / PCL / PostScript / 能力未知 / 打印机已移除）、`400 invalid_controls`。
+
+打印语言由服务端按能力自动选择：优先 `PDF`，其次 `PCL`，再其次 `POSTSCRIPT`，
+客户端无需指定。
+
+双面控制（`DUPLEX` / `BINDING`）对 PCL 打印机通过注入 PCL 指令 `ESC&l#S`
+生效（`0S` 单面 / `1S` 长边双面 / `2S` 短边双面）；部分打印机忽略 PJL
+`DUPLEX` 设置。
 
 ## GET /api/jobs/{id}
 

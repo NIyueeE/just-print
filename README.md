@@ -8,8 +8,9 @@
 
 ## 特性
 
-- 通过轮询 `/sys/class/usb/lp*` 发现打印机（含热插拔），从 sysfs 获取简要名称与序列号；前端自动选中第一台可用（支持 PDF）打印机
+- 通过轮询 `/sys/class/usb/lp*` 与 `/sys/class/usbmisc/lp*` 发现打印机（默认双根扫描并按设备节点去重，兼容不同内核布局，含热插拔），从 sysfs 获取简要名称与序列号；前端自动选中第一台可打印的打印机（支持 PDF / PCL / PostScript 任一语言）
 - 通过 PJL 查询打印机的完整能力，只暴露实用参数（双面/翻页、省墨、墨水浓度、纸张类型、打印分辨率等）
+- 打印语言自动选择：优先 PDF，其次 PCL（Ghostscript `ljet4` 转 PCL5e），再其次 PostScript；PCL 双面/翻页通过注入 PCL 指令控制
 - 上传常见工作文档（DOCX / XLSX / PPTX / ODT / ODS / ODP / Markdown / 纯文本 / PDF），由镜像内置的 headless LibreOffice 统一转换为 PDF 并提供预览
 - 同一台打印机的所有设备访问（打印 / 能力查询 / 复位）严格串行，任务按提交顺序 FIFO 执行
 - 单令牌准入（Bearer，常量时间比较，未配置令牌时 fail-closed 拒绝启动）：不区分用户、无会话；TLS 由云网关 / 反向代理终结
@@ -27,16 +28,16 @@ flowchart LR
     API -->|按打印机入队| W[每打印机 worker · FIFO 通道]
     W --> PJL[PJL 包装层]
     PJL -->|/dev/usb/lp*| PRT[USB 打印机]
-    DIS[设备发现] -->|轮询 /sys/class/usb/lp*| API
+    DIS[设备发现] -->|轮询 sysfs lp* 条目| API
 ```
 
 | 层 | 职责 |
 | --- | --- |
-| PJL 包装层 | 轮询发现打印机、查询/解析/缓存 PJL 能力；只接收 PDF + 合法控制信息，执行打印 |
+| PJL 包装层 | 轮询发现打印机、查询/解析/缓存 PJL 能力；只接收 PDF / PCL / PostScript + 合法控制信息，执行打印 |
 | 中间层 | 文件上传与临时存储、调用容器内 LibreOffice 转换为 PDF、预览、每打印机 worker 调度、Web API |
 | 前端层 | 上传文件、展示预览、构建控制信息、展示任务状态（Gruvbox 风格） |
 
-文档转换在容器内完成：镜像内置 `soffice --headless`（Writer / Calc / Impress 组件）与字体（`fonts-noto-cjk`、`fonts-liberation`），中间层以子进程方式调用，字节/文件进、PDF 出。
+文档转换在容器内完成：镜像内置 `soffice --headless`（Writer / Calc / Impress 组件）、字体（`fonts-noto-cjk`、`fonts-liberation`）与 Ghostscript，中间层以子进程方式调用，字节/文件进、PDF 出；不支持 PDF 的打印机在打印时由 Ghostscript 将 PDF 转为 PCL 或 PostScript（按能力选择）。
 
 ## 目录结构
 
@@ -135,7 +136,7 @@ podman build -f Containerfile -t ghcr.io/niyueee/just-print:local .
 | `JUST_PRINT_TOKEN` | 无 | 准入令牌，建议 32 字节以上随机值；未配置或为空时服务拒绝启动（fail-closed，已实现） |
 | `JUST_PRINT_ADDR` | `0.0.0.0:8080` | 后端监听地址；容器内直接对外监听，TLS 由云负载均衡 / Ingress / 反向代理终结 |
 | `JUST_PRINT_WEB_DIR` | `/usr/share/just-print/web` | 前端静态文件目录（镜像内已内置，一般无需修改） |
-| `JUST_PRINT_SYSFS_DIR` | `/sys/class/usb` | 设备发现扫描根目录；默认无需修改，测试/伪设备场景可指向临时目录 |
+| `JUST_PRINT_SYSFS_DIR` | `/sys/class/usb` | 设备发现扫描根目录；默认同时扫描 `/sys/class/usbmisc`（usblp 在不同内核下的 class 布局）并按设备节点去重，显式设置后只扫描指定目录，测试/伪设备场景可指向临时目录 |
 | `JUST_PRINT_DEVICE_DIR` | `/dev/usb` | 打印机设备节点目录；默认无需修改，设备节点映射到其它路径时可调整 |
 
 ### TLS 与访问控制
@@ -146,13 +147,15 @@ podman build -f Containerfile -t ghcr.io/niyueee/just-print:local .
 
 ### USB 打印机透传
 
-宿主机需要 Linux 内核 `usblp` 模块，且 `/dev/usb/lp*` 设备节点对容器可见（通常属于 `lp` 组）。容器运行时需映射设备节点：
+宿主机需要 Linux 内核 `usblp` 模块，且 `/dev/usb/lp*` 设备节点对容器可见（通常属于 `lp` 组）。容器运行时需映射设备节点，推荐以目录方式映射整个 `/dev/usb`（自动包含全部 `lp*` 节点，新增打印机无需改部署配置）：
 
-- `docker run` / `podman run`：`--device /dev/usb/lp0:/dev/usb/lp0`
-- Compose：取消 [examples/compose.yaml](examples/compose.yaml) 中 `devices:` 注释
-- Quadlet：取消 [examples/just-print.container](examples/just-print.container) 中 `Device=` 注释
+- `docker run` / `podman run`：`--device /dev/usb:/dev/usb`
+- Compose：取消 [examples/compose.yaml](examples/compose.yaml) 中 `devices:` 注释（示例已改为目录映射）
+- Quadlet：取消 [examples/just-print.container](examples/just-print.container) 中 `Device=` 注释（示例已改为目录映射）
 
-> 容器场景下热插拔能力有限：容器启动后新插入的设备节点需要宿主 udev 配合，重新创建/重启容器才能映射。
+需要最小权限时也可逐个映射具体节点：`--device /dev/usb/lp0:/dev/usb/lp0`。
+
+> 容器场景下热插拔能力有限：Docker 的目录映射是启动时快照，启动后新插入的设备节点需要宿主 udev 配合，重新创建/重启容器才能映射；Podman rootless 下目录为绑定挂载，新节点可直接出现，但仍受宿主机设备权限约束。
 
 ### 临时文件
 
@@ -177,7 +180,7 @@ just init-hooks
 
 ### 测试覆盖
 
-- `cargo test`：19 个单元测试，覆盖 PJL 能力解析（含真实打印机样例）、sysfs 设备发现、会话字节流与超时、控制参数校验、PDF 校验与 id 生成。
+- `cargo test`：29 个单元测试，覆盖 PJL 能力解析（含真实打印机样例）、sysfs 设备发现与多根合并去重、PDF→PCL / PostScript 转换、会话字节流（PDF / PCL / PostScript / 复位）与超时、PCL 双面指令映射、控制参数校验、PDF 校验与 id 生成。
 - CI（[.github/workflows/ci.yml](.github/workflows/ci.yml)）：完整检查链 + 镜像构建 + 容器冒烟测试（未带令牌 401、上传 txt 经 LibreOffice 转 PDF 并预览、缺失打印机 404）。
 - 无打印机环境可做伪设备全链路验证：`JUST_PRINT_SYSFS_DIR` 指向含 `lp0` 条目的伪 sysfs 目录、`JUST_PRINT_DEVICE_DIR` 指向含 FIFO 设备的目录，即可走通「发现 → 能力查询 → 打印」闭环。
 
@@ -199,7 +202,7 @@ just init-hooks
 
 ## 支持的上传格式
 
-中间层是格式的唯一入口：所有上传格式统一转换为 PDF 后，才交给 PJL 包装层。PJL 层只感知一个 PDF 字节流与合法控制信息，不感知原始格式。
+中间层是格式的唯一入口：所有上传格式统一转换为 PDF 后，才交给 PJL 包装层。PJL 层感知 PDF / PCL / PostScript 字节流（按打印机能力选择语言）与合法控制信息，不感知原始格式。
 
 | 格式 | 处理方式 |
 | --- | --- |
@@ -214,6 +217,7 @@ just init-hooks
 ## 文档转换
 
 - 镜像内置 LibreOffice Writer / Calc / Impress 组件与 `fonts-noto-cjk`、`fonts-liberation`，无需在宿主机安装 LibreOffice。
+- 镜像内置 Ghostscript（`ps2write` / `ljet4`）：不支持 PDF personality 的打印机在打印时把 PDF 转换为 PCL 或 PostScript 后发送；转换在 worker 内串行执行，不占用上传转换的信号量。
 - 中间层通过 `soffice --headless --convert-to pdf` 子进程转换，用信号量限制并发转换数量（CPU 密集操作）。
 - 每个转换进程必须使用独立的用户配置目录（`-env:UserInstallation=file:///tmp/...`），仅靠信号量不足以避免并行 `soffice` 实例争用默认配置导致的锁冲突/偶发失败。
 - 转换以容器内 LibreOffice 版本为准；与 Microsoft Office / WPS 的排版细节可能存在差异。
@@ -236,12 +240,12 @@ just init-hooks
 ### 所有设备访问整体串行
 
 - 不只打印任务需要串行：能力查询、设备复位同样是 PJL 会话，必须走同一台打印机的 worker，否则会把查询字节穿插进打印数据流。
-- 能力查询是低频 init 操作：设备被发现/热插拔时入队执行并缓存，不随每次打印重复查询；查询失败后随轮询周期重试，重试查询排在已排队的打印任务之后。
+- 能力查询是低频 init 操作：设备被发现/热插拔时入队执行并缓存，不随每次打印重复查询；空响应或缺少 `PERSONALITY` 的响应会在查询内自动重试，仍失败则随轮询周期重试，重试查询排在已排队的打印任务之后。
 - 查询失败不阻塞服务启动：设备先标记为「能力未知」，随轮询周期自动重试，成功后出现在打印机列表中。
 
 ### 设备发现与热插拔
 
-- 设备发现只读 `/sys/class/usb/lp*`（符号链接指向对应 USB 接口），并从 sysfs 读取 `product` / `manufacturer` / `serial`——这些字段不在 lp 节点自身，需沿 `device` 符号链接向上定位到 USB 设备目录读取；不调用 `lsusb`，不依赖 usbutils / udev。
+- 设备发现只读 `/sys/class/usb/lp*` 与 `/sys/class/usbmisc/lp*`（默认双根扫描并按设备节点去重，部分内核把 usblp 注册到 usbmisc class），并从 sysfs 读取 `product` / `manufacturer` / `serial`——这些字段不在 lp 节点自身，需沿 `device` 符号链接向上定位到 USB 设备目录读取；不调用 `lsusb`，不依赖 usbutils / udev。
 - v1 固定每 5 秒轮询一次，与上次结果做 diff：新增设备 → 创建 worker 并查询能力；设备消失 → 失败相关任务并销毁 worker。
 - 设备身份优先使用 sysfs `serial`；序列号缺失时回退到 lp 节点路径（此时路径变化会被识别为新设备，记入日志）。
 
@@ -269,7 +273,7 @@ just init-hooks
 - [x] 交付形态：Containerfile（docker/podman）、GHCR 发布、compose 与 Quadlet 示例
 - [x] 后端 HTTP 骨架：静态前端 + `/healthz`
 - [x] PJL 包装层
-  - [x] 轮询 `/sys/class/usb/lp*` 发现设备（v1 固定 5 秒），读取 sysfs `product` / `manufacturer` / `serial`；前端默认选中第一台可用打印机
+  - [x] 轮询 `/sys/class/usb/lp*` 与 `/sys/class/usbmisc/lp*` 发现设备（v1 固定 5 秒，默认双根扫描去重），读取 sysfs `product` / `manufacturer` / `serial`；前端默认选中第一台可用打印机
   - [x] 以 sysfs `serial` 维护设备身份，缺失时回退 lp 节点路径
   - [x] 设备发现/热插拔时通过 PJL 查询能力并解析、缓存，仅保留实用参数：
     - 双面打印与翻页：`DUPLEX`、`BINDING`
@@ -277,8 +281,9 @@ just init-hooks
     - 墨水浓度：`DENSITY`
     - 纸张类型：`MEDIATYPE`
     - 打印分辨率：`RESOLUTION`
-  - [x] 严格校验 PDF 与控制信息，将 打印机名称 + 能力 传递给前端用于构建合法控制信息
-  - [x] 执行打印（一个 PDF + 一个合法控制信息），会话带超时；失败或超时后，下次会话前先发送 UEL 复位
+  - [x] 严格校验 PDF / PCL / PostScript 与控制信息，将 打印机名称 + 能力 传递给前端用于构建合法控制信息
+  - [x] 执行打印（PDF / PCL / PostScript + 合法控制信息，按能力选择语言），会话带超时；失败或超时后，下次会话前先发送 UEL 复位
+  - [x] 打印语言选择：优先 PDF，其次 PCL，再其次 PostScript（Ghostscript 转换）
 - [x] 中间层
   - [x] 上传文件分配唯一 id，调用容器内 LibreOffice 统一转换为 PDF；文件临时存储
   - [x] 预览：`GET /api/files/{id}` 直接返回 PDF，前端用浏览器查看器展示
@@ -291,13 +296,13 @@ just init-hooks
   - [x] 打印机选择与实用控制项
   - [x] 令牌输入与 `sessionStorage` 存储、401 处理
   - [x] 任务状态展示（含服务重启导致的 404 提示）
-- [ ] 真机验证：在真实 USB 打印机上验证 PJL 会话、打印输出与热插拔行为（当前 WSL 环境无打印机，已用伪设备完成全链路测试）
+- [x] 真机验证：Lenovo LJ4000D 上完成设备发现、PJL 能力解析、PCL 打印与双面控制验证；PDF 直发被该机型拒绝，PostScript 回退空白，最终以 PCL5e（Ghostscript `ljet4`）方案打通
 
 ## 设计约定
 
 - 容器是唯一交付与部署方式：镜像内置后端、前端静态文件、LibreOffice 与字体；宿主机只需提供 Linux 内核 `usblp` 模块与设备节点权限。
 - 不使用 CUPS、`lp`/`lpr` 或打印机驱动，也不依赖宿主机安装 usbutils / udev / LibreOffice。
-- 打印机只接受 PDF：中间层用 LibreOffice 将上传格式统一转换为 PDF 后再交给 PJL 层，输出前严格校验。
+- 打印机只接受 PDF / PCL / PostScript：中间层用 LibreOffice 将上传格式统一转换为 PDF；不支持 PDF 的打印机打印时由 Ghostscript 转为 PCL 或 PostScript，输出前严格校验。
 - 单租户、无用户体系：准入仅依赖共享令牌 `JUST_PRINT_TOKEN`，不使用会话与 Cookie。
 - 传输安全由云网关 / 反向代理负责：后端仅提供 HTTP，容器内默认监听 `0.0.0.0:8080`。
 - 同一台打印机的所有设备访问（打印 / 能力查询 / 复位）严格串行，不同打印机可以并行。
@@ -310,30 +315,47 @@ just init-hooks
 - 仅支持 Linux。
 - 仅支持「支持的上传格式」列出的格式；旧版二进制格式（`.doc` / `.xls` / `.ppt`）不在 v1 范围。
 - 文档转换以容器内 LibreOffice 为准，与 Microsoft Office / WPS 的排版可能存在差异。
+- 打印语言支持 PDF、PCL 与 PostScript：只声明 IBM / EPSON 等其它语言的打印机无法打印（前端会禁用）。
 - 第一版队列为内存队列，进程重启会丢失未完成任务。
 - 无序列号打印机的身份依赖设备节点路径，拔插后路径变化会被识别为新设备。
 - 热插拔期间正在打印或排队中的任务会失败，需要用户重新提交。
 - 容器场景下 USB 热插拔依赖宿主 udev 与设备节点映射，能力有限。
 - 设备会话固定 60 秒超时，超大打印任务可能被中断，v1 暂不可配置；阻塞式写入已通过非阻塞 fd + 每步超时规避。
-- 当前开发环境（WSL）没有真实打印机：已用伪设备（FIFO + 伪 sysfs）完成发现、能力查询、打印与热插拔的全链路验证，能力解析与会话字节流有单元测试覆盖，但真实 USB 设备上的行为仍需实体验证。
+- 真机验证结论（Lenovo LJ4000D）：发现、能力解析、PCL 打印与双面控制正常；该机型拒绝 PDF 直发（打印错误页）、对 `@PJL ENTER LANGUAGE=PCL` 敏感（空白页/卡在接收数据）、非阻塞写后立即关闭会丢数据（已用 2 秒排空解决）。其它机型仍需实机确认。
 
 ## 附录：PJL 打印字节流（设计约定）
 
-一次打印会话按以下字节序列发送到 `/dev/usb/lp*`：
+PDF / PostScript 会话按以下字节序列发送到 `/dev/usb/lp*`：
 
 ```text
 \x1B%-12345X                      # UEL：进入 PJL 模式
 @PJL SET DUPLEX=ON\r\n           # 控制信息，按能力查询结果生成
 @PJL SET BINDING=LONGEDGE\r\n
-@PJL ENTER LANGUAGE=PDF\r\n      # 切换到 PDF 语言
-<PDF 原始字节流>
+@PJL ENTER LANGUAGE=PDF\r\n      # 切换到打印语言（PDF 或 POSTSCRIPT；PCL 见下文）
+<PDF 或 PostScript 字节流>
 \x1B%-12345X                      # UEL：结束会话 / 复位
 ```
+
+PCL 打印不发送 `@PJL ENTER LANGUAGE=PCL`：部分打印机对该指令敏感（空白页或
+卡在「接收数据」），真机验证的正确方式是设置完控制项后退出 PJL，再直接发送
+原始 PCL 数据流：
+
+```text
+\x1B%-12345X                      # UEL：进入 PJL 模式
+@PJL SET DUPLEX=ON\r\n           # 控制信息，按能力查询结果生成
+\x1B%-12345X                      # UEL：退出 PJL，回到打印机默认语言
+<PCL 原始字节流>
+```
+
+双面控制不走 PJL：部分打印机忽略 PJL `DUPLEX` 设置，改为在 PCL 数据开头注入
+`ESC&l#S`（`0S` 单面 / `1S` 长边双面 / `2S` 短边双面）；同时剥掉 Ghostscript
+输出开头的 `ESC E`（打印机复位），避免其重置控制设置。
 
 约定（由 `src/pjl/session.rs` 实现）：
 
 - 控制信息只允许使用能力查询返回的合法值；未查询到对应能力时不下发该参数。
-- 部分打印机不支持 PDF personality（只支持 PCL / PostScript 等）：能力查询会解析 `PERSONALITY`，明确不含 `PDF` 时将该设备标记为不可用并在前端提示并禁用打印，而不是发送后得到乱码。
+- 打印语言以 `PERSONALITY` 为准：能力查询会解析 `PERSONALITY`，含 `PDF` 时直接发送 PDF；不含 `PDF` 但含 `PCL` 时由 Ghostscript（`ljet4`）转为 PCL5e 发送；再不含 `PCL` 但含 `POSTSCRIPT` 时转为 PostScript 发送；三者都不含时标记为不可用并在前端提示并禁用打印。`PERSONALITY` 缺失视为能力未完整加载（响应可能被截断），查询会重试，取得前不假定语言、不发送数据。
+- 非阻塞写入返回后数据可能仍在 USB 传输中：会话保持打开约 2 秒排空后再关闭（真机验证：立即关闭会导致打印机不出纸）。
 - 能力查询、打印、复位都是完整 PJL 会话，必须由同一台打印机的 worker 串行执行。
 
 ## 附录：PJL 能力查询参考

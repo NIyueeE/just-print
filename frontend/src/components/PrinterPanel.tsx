@@ -66,8 +66,13 @@ export function PrinterPanel({
         if (previous && result.printers.some((printer) => printer.id === previous)) {
           return previous
         }
-        const first = result.printers.find((printer) => printer.pdf_supported) ??
-          result.printers[0]
+        const first =
+          result.printers.find(
+            (printer) =>
+              printer.pdf_supported ||
+              printer.postscript_supported ||
+              printer.pcl_supported,
+          ) ?? result.printers[0]
         return first ? first.id : ''
       })
     } catch (requestError) {
@@ -129,7 +134,9 @@ export function PrinterPanel({
   const canPrint =
     upload !== null &&
     selected !== null &&
-    selected.pdf_supported &&
+    (selected.pdf_supported ||
+      selected.postscript_supported ||
+      selected.pcl_supported) &&
     selected.capabilities !== null &&
     !busy
 
@@ -141,8 +148,12 @@ export function PrinterPanel({
       setError('打印机能力尚未加载，请稍候')
       return
     }
-    if (!selected.pdf_supported) {
-      setError('打印机不支持 PDF 输出')
+    if (
+      !selected.pdf_supported &&
+      !selected.pcl_supported &&
+      !selected.postscript_supported
+    ) {
+      setError('打印机不支持 PDF / PCL / PostScript 输出')
       return
     }
     setBusy(true)
@@ -190,8 +201,20 @@ export function PrinterPanel({
               ))}
             </select>
           </label>
-          {selected && !selected.pdf_supported ? (
-            <p class="error">该打印机不支持 PDF 输出，无法打印。</p>
+          {selected &&
+          !selected.pdf_supported &&
+          !selected.pcl_supported &&
+          !selected.postscript_supported ? (
+            <p class="error">该打印机不支持 PDF / PCL / PostScript 输出，无法打印。</p>
+          ) : null}
+          {selected && !selected.pdf_supported && selected.pcl_supported ? (
+            <p class="muted">该打印机不支持 PDF，将使用 PCL 打印。</p>
+          ) : null}
+          {selected &&
+          !selected.pdf_supported &&
+          !selected.pcl_supported &&
+          selected.postscript_supported ? (
+            <p class="muted">该打印机不支持 PDF，将使用 PostScript 打印。</p>
           ) : null}
           {selected && selected.capabilities === null ? (
             <p class="muted">打印机能力加载中…</p>

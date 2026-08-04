@@ -63,6 +63,7 @@ impl AppState {
             Arc::clone(&jobs),
             Arc::clone(&files),
             config.session_timeout,
+            config.conversion_timeout,
             config.discovery_interval,
             config.sysfs_root.clone(),
             config.device_dir.clone(),

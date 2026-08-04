@@ -14,6 +14,8 @@ pub const DEFAULT_ADDR: &str = "0.0.0.0:8080";
 pub const DEFAULT_WEB_DIR: &str = "/usr/share/just-print/web";
 /// 默认 sysfs 设备发现根目录。
 pub const DEFAULT_SYSFS_ROOT: &str = "/sys/class/usb";
+/// `usblp` 在部分内核布局下注册到 `usbmisc` class；使用默认扫描根时与此目录一并扫描。
+pub const FALLBACK_SYSFS_ROOT: &str = "/sys/class/usbmisc";
 /// 默认设备节点目录。
 pub const DEFAULT_DEVICE_DIR: &str = "/dev/usb";
 /// 上传大小上限：64 MiB。

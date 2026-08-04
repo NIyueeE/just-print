@@ -22,6 +22,8 @@ export interface Printer {
   manufacturer: string | null
   serial: string | null
   pdf_supported: boolean
+  postscript_supported: boolean
+  pcl_supported: boolean
   capabilities: Record<string, CapabilityView> | null
 }
 

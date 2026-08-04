@@ -5,7 +5,8 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use crate::pjl::{DiscoveredPrinter, Variable, print_pdf, query_capabilities, reset};
+use crate::conversion;
+use crate::pjl::{DiscoveredPrinter, Variable, print_document, query_capabilities, reset};
 use crate::store::{FileStore, JobStatus, JobStore};
 use tokio::sync::{RwLock, mpsc};
 use tracing::{info, warn};
@@ -36,6 +37,8 @@ pub enum WorkerCommand {
         pdf_path: PathBuf,
         /// 已校验的控制信息。
         controls: BTreeMap<String, String>,
+        /// 打印语言（`PDF` 或 `POSTSCRIPT`，由能力表选择）。
+        language: &'static str,
     },
     /// 停止 worker（打印机已移除）。
     Shutdown,
@@ -48,6 +51,7 @@ struct WorkerContext {
     queued: Arc<Mutex<HashMap<String, HashSet<String>>>>,
     capabilities: Arc<RwLock<Option<BTreeMap<String, Variable>>>>,
     session_timeout: Duration,
+    conversion_timeout: Duration,
     printer_id: String,
 }
 
@@ -59,6 +63,7 @@ pub fn spawn_worker(
     files: Arc<FileStore>,
     queued: Arc<Mutex<HashMap<String, HashSet<String>>>>,
     session_timeout: Duration,
+    conversion_timeout: Duration,
 ) -> WorkerHandle {
     let (tx, rx) = mpsc::channel(64);
     let capabilities = Arc::new(RwLock::new(None));
@@ -69,6 +74,7 @@ pub fn spawn_worker(
         queued,
         capabilities: Arc::clone(&capabilities),
         session_timeout,
+        conversion_timeout,
         printer_id: printer_id.clone(),
     };
     let loop_printer = printer.clone();
@@ -110,6 +116,7 @@ async fn worker_loop(
                 file_id,
                 pdf_path,
                 controls,
+                language,
             } => {
                 {
                     let mut queued = context
@@ -127,21 +134,39 @@ async fn worker_loop(
                     let _ = reset(&printer.path, context.session_timeout).await;
                 }
 
-                let result = match tokio::fs::read(&pdf_path).await {
-                    Err(error) => Err(format!("读取 PDF 失败: {error}")),
-                    Ok(pdf) => {
-                        match tokio::time::timeout(
-                            context.session_timeout,
-                            print_pdf(&printer.path, &pdf, &controls, context.session_timeout),
+                let result: Result<(), String> = (async {
+                    let document = tokio::fs::read(&pdf_path)
+                        .await
+                        .map_err(|error| format!("读取 PDF 失败: {error}"))?;
+                    let document = match language {
+                        "POSTSCRIPT" => conversion::convert_pdf_to_postscript(
+                            &document,
+                            context.conversion_timeout,
                         )
                         .await
-                        {
-                            Err(_) => Err(crate::pjl::PjlError::Timeout("print").to_string()),
-                            Ok(Err(error)) => Err(error.to_string()),
-                            Ok(Ok(())) => Ok(()),
+                        .map_err(|error| error.to_string())?,
+                        "PCL" => {
+                            conversion::convert_pdf_to_pcl(&document, context.conversion_timeout)
+                                .await
+                                .map_err(|error| error.to_string())?
                         }
-                    }
-                };
+                        _ => document,
+                    };
+                    tokio::time::timeout(
+                        context.session_timeout,
+                        print_document(
+                            &printer.path,
+                            &document,
+                            language,
+                            &controls,
+                            context.session_timeout,
+                        ),
+                    )
+                    .await
+                    .map_err(|_| crate::pjl::PjlError::Timeout("print").to_string())?
+                    .map_err(|error| error.to_string())
+                })
+                .await;
 
                 match result {
                     Ok(()) => {

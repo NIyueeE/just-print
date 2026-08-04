@@ -16,7 +16,8 @@ services:
       JUST_PRINT_TOKEN: "${JUST_PRINT_TOKEN}"
     # 转换产生的临时文件放在内存文件系统，容器重启即清空。
     tmpfs: /tmp
-    # 若宿主机有 USB 打印机，取消注释并把设备节点映射进容器：
+    # 若宿主机有 USB 打印机，取消注释并以目录方式映射整个 /dev/usb（自动包含所有 lp* 节点）：
     # devices:
+    #   - /dev/usb:/dev/usb
+    # 需要更小权限时也可只映射具体节点，例如：
     #   - /dev/usb/lp0:/dev/usb/lp0
-    #   - /dev/usb/lp1:/dev/usb/lp1

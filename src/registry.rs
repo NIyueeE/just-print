@@ -1,6 +1,7 @@
 //! 打印机注册表：5 秒轮询发现、热插拔 diff、每打印机 worker 生命周期。
 
 use std::collections::{BTreeMap, HashMap, HashSet};
+use std::path::Path;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -9,10 +10,11 @@ use serde::Serialize;
 use tokio::sync::RwLock;
 use tracing::{info, warn};
 
+use crate::config::{DEFAULT_SYSFS_ROOT, FALLBACK_SYSFS_ROOT};
 use crate::error::AppError;
 use crate::pjl::{
-    PRACTICAL_VARIABLES, Variable, VariableKind, practical_variables, printer_id, scan_sysfs_from,
-    supports_pdf,
+    PRACTICAL_VARIABLES, Variable, VariableKind, practical_variables, print_language, printer_id,
+    scan_sysfs_from_many, supports_pcl, supports_pdf, supports_postscript,
 };
 use crate::store::{FileStore, JobStatus, JobStore};
 use crate::workers::{WorkerCommand, WorkerHandle, spawn_worker};
@@ -48,6 +50,10 @@ pub struct PrinterView {
     pub serial: Option<String>,
     /// 是否支持 PDF 输出；能力未知时为 `false`。
     pub pdf_supported: bool,
+    /// 是否支持 PostScript 输出（PDF 不可用时的回退语言）。
+    pub postscript_supported: bool,
+    /// 是否支持 PCL 输出（PDF 不可用时的回退语言）。
+    pub pcl_supported: bool,
     /// 实用能力表；`None` 表示尚未查询到。
     pub capabilities: Option<BTreeMap<String, CapabilityView>>,
 }
@@ -59,6 +65,7 @@ pub struct PrinterRegistry {
     jobs: Arc<JobStore>,
     files: Arc<FileStore>,
     session_timeout: Duration,
+    conversion_timeout: Duration,
     discovery_interval: Duration,
     sysfs_root: std::path::PathBuf,
     device_dir: std::path::PathBuf,
@@ -71,6 +78,7 @@ impl PrinterRegistry {
         jobs: Arc<JobStore>,
         files: Arc<FileStore>,
         session_timeout: Duration,
+        conversion_timeout: Duration,
         discovery_interval: Duration,
         sysfs_root: std::path::PathBuf,
         device_dir: std::path::PathBuf,
@@ -81,6 +89,7 @@ impl PrinterRegistry {
             jobs,
             files,
             session_timeout,
+            conversion_timeout,
             discovery_interval,
             sysfs_root,
             device_dir,
@@ -111,6 +120,8 @@ impl PrinterRegistry {
                 manufacturer: handle.printer.manufacturer.clone(),
                 serial: handle.printer.serial.clone(),
                 pdf_supported,
+                postscript_supported: capabilities.as_ref().is_some_and(supports_postscript),
+                pcl_supported: capabilities.as_ref().is_some_and(supports_pcl),
                 capabilities: capabilities.as_ref().map(practical_view),
             });
         }
@@ -122,8 +133,8 @@ impl PrinterRegistry {
     ///
     /// # Errors
     ///
-    /// 文件/打印机不存在、打印机未就绪或不支持 PDF、控制信息非法、或入队失败时
-    /// 返回 [`AppError`]。
+    /// 文件/打印机不存在、打印机未就绪或不支持 PDF / PCL / PostScript、控制信息非法、
+    /// 或入队失败时返回 [`AppError`]。
     pub async fn submit(
         &self,
         printer_id: &str,
@@ -139,11 +150,12 @@ impl PrinterRegistry {
         let capabilities = handle.capabilities.read().await.clone().ok_or_else(|| {
             AppError::PrinterUnavailable("打印机能力尚未加载，请稍后重试".to_string())
         })?;
-        if !supports_pdf(&capabilities) {
-            return Err(AppError::PrinterUnavailable(
-                "打印机不支持 PDF 输出".to_string(),
-            ));
-        }
+        let language = print_language(&capabilities).ok_or_else(|| {
+            AppError::PrinterUnavailable(
+                "打印机不支持或未报告可打印语言（PDF / PCL / PostScript），能力可能未完整加载"
+                    .to_string(),
+            )
+        })?;
         validate_controls(&capabilities, &controls)?;
 
         let pdf_path = self.files.retain(file_id).ok_or(AppError::FileNotFound)?;
@@ -157,6 +169,7 @@ impl PrinterRegistry {
             file_id: file_id.to_string(),
             pdf_path,
             controls,
+            language,
         };
         if handle.tx.send(command).await.is_err() {
             self.untrack(printer_id, &job_id);
@@ -171,7 +184,13 @@ impl PrinterRegistry {
     }
 
     async fn refresh(&self) {
-        let found = scan_sysfs_from(&self.sysfs_root, &self.device_dir);
+        let default_root = Path::new(DEFAULT_SYSFS_ROOT);
+        let roots = if self.sysfs_root == default_root {
+            vec![default_root, Path::new(FALLBACK_SYSFS_ROOT)]
+        } else {
+            vec![self.sysfs_root.as_path()]
+        };
+        let found = scan_sysfs_from_many(&roots, &self.device_dir);
         let mut printers = self.printers.write().await;
         let mut next = HashMap::with_capacity(found.len());
 
@@ -195,6 +214,7 @@ impl PrinterRegistry {
                         Arc::clone(&self.files),
                         Arc::clone(&self.queued),
                         self.session_timeout,
+                        self.conversion_timeout,
                     );
                     let _ = handle.tx.send(WorkerCommand::Query).await;
                     next.insert(id, handle);
@@ -207,6 +227,7 @@ impl PrinterRegistry {
                         Arc::clone(&self.files),
                         Arc::clone(&self.queued),
                         self.session_timeout,
+                        self.conversion_timeout,
                     );
                     let _ = handle.tx.send(WorkerCommand::Query).await;
                     next.insert(id, handle);

@@ -1,8 +1,11 @@
-//! 通过轮询 `/sys/class/usb/lp*` 发现 USB 打印机。
+//! 通过轮询 `/sys/class/usb/lp*` 与 `/sys/class/usbmisc/lp*` 发现 USB 打印机。
 //!
-//! 只读 sysfs：设备名称、制造商、序列号沿符号链接向上定位到 USB 设备目录读取，
-//! 不调用 `lsusb`，不依赖 usbutils / udev。
+//! 不同内核版本把 `usblp` 设备注册到不同 class 目录：使用默认根时同时扫描
+//! `usb` 与 `usbmisc` 并按设备节点路径去重，两种布局都能发现。只读 sysfs：
+//! 设备名称、制造商、序列号沿符号链接向上定位到 USB 设备目录读取，不调用
+//! `lsusb`，不依赖 usbutils / udev。
 
+use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -41,6 +44,25 @@ pub fn scan_sysfs_from(root: &Path, device_dir: &Path) -> Vec<DiscoveredPrinter>
     printers
 }
 
+/// 合并扫描多个根目录：按设备节点路径去重，再按 `lp` 编号排序。
+///
+/// 同一设备在部分内核布局下可能同时出现在多个 class 目录，按节点路径去重可避免
+/// 创建重复 worker。
+#[must_use]
+pub fn scan_sysfs_from_many(roots: &[&Path], device_dir: &Path) -> Vec<DiscoveredPrinter> {
+    let mut seen = HashSet::new();
+    let mut printers = Vec::new();
+    for root in roots {
+        for printer in scan_sysfs_from(root, device_dir) {
+            if seen.insert(printer.path.clone()) {
+                printers.push(printer);
+            }
+        }
+    }
+    printers.sort_by_key(|printer| lp_number(&printer.path));
+    printers
+}
+
 /// 生成稳定的打印机身份：优先序列号，缺失时回退到 lp 节点路径。
 #[must_use]
 pub fn printer_id(printer: &DiscoveredPrinter) -> String {
@@ -50,7 +72,8 @@ pub fn printer_id(printer: &DiscoveredPrinter) -> String {
         .unwrap_or_else(|| printer.path.to_string_lossy().into_owned())
 }
 
-/// 解析 `/sys/class/usb/lpN` 条目为 [`DiscoveredPrinter`]；无法识别时返回 `None`。
+/// 解析 `/sys/class/usb/lpN` 或 `/sys/class/usbmisc/lpN` 条目为 [`DiscoveredPrinter`]；
+/// 无法识别时返回 `None`。
 ///
 /// 单元测试可直接构造一个伪 sysfs 目录结构来覆盖此函数。
 pub fn parse_lp_entry(entry: &Path, device_dir: &Path) -> Option<DiscoveredPrinter> {
@@ -112,7 +135,7 @@ mod tests {
 
     use crate::ids;
 
-    use super::{parse_lp_entry, scan_sysfs_from};
+    use super::{parse_lp_entry, scan_sysfs_from, scan_sysfs_from_many};
     use std::path::Path;
 
     fn temp_root() -> PathBuf {
@@ -202,5 +225,44 @@ mod tests {
     #[test]
     fn rejects_non_lp_names() {
         assert!(parse_lp_entry(&PathBuf::from("/tmp/usb0"), Path::new("/dev/usb")).is_none());
+    }
+
+    #[test]
+    fn merges_roots_and_dedupes_by_device_path() {
+        let root_a = temp_root();
+        let root_b = temp_root();
+        let device_dir = temp_root();
+        let device_a = root_a.join("dev-a");
+        let device_b = root_b.join("dev-b");
+        write_attr(&device_a, "product", "A");
+        write_attr(&device_a, "serial", "S1");
+        write_attr(&device_b, "product", "B");
+        write_attr(&device_b, "serial", "S2");
+
+        // lp0 同时出现在两个根目录（同一设备节点路径，应去重）。
+        assert!(std::os::unix::fs::symlink(&device_a, root_a.join("lp0")).is_ok());
+        assert!(std::os::unix::fs::symlink(&device_a, root_b.join("lp0")).is_ok());
+        // lp2 只在 root_b，lp10 只在 root_a。
+        assert!(std::os::unix::fs::symlink(&device_b, root_b.join("lp2")).is_ok());
+        assert!(std::os::unix::fs::symlink(&device_b, root_a.join("lp10")).is_ok());
+
+        let printers = scan_sysfs_from_many(&[&root_a, &root_b], &device_dir);
+        assert_eq!(printers.len(), 3);
+        assert_eq!(
+            printers
+                .iter()
+                .map(|printer| printer
+                    .path
+                    .file_name()
+                    .unwrap_or_default()
+                    .to_string_lossy()
+                    .into_owned())
+                .collect::<Vec<_>>(),
+            vec!["lp0", "lp2", "lp10"]
+        );
+
+        let _ = std::fs::remove_dir_all(&root_a);
+        let _ = std::fs::remove_dir_all(&root_b);
+        let _ = std::fs::remove_dir_all(&device_dir);
     }
 }

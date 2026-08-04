@@ -8,7 +8,8 @@ pub mod discover;
 pub mod session;
 
 pub use capabilities::{
-    PRACTICAL_VARIABLES, Variable, VariableKind, practical_variables, supports_pdf,
+    PRACTICAL_VARIABLES, Variable, VariableKind, practical_variables, print_language, supports_pcl,
+    supports_pdf, supports_postscript,
 };
-pub use discover::{DiscoveredPrinter, printer_id, scan_sysfs_from};
-pub use session::{PjlError, print_pdf, query_capabilities, reset};
+pub use discover::{DiscoveredPrinter, printer_id, scan_sysfs_from_many};
+pub use session::{PjlError, print_document, query_capabilities, reset};

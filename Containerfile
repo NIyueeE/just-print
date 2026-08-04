@@ -26,6 +26,7 @@ RUN apt-get update \
         curl \
         fonts-liberation \
         fonts-noto-cjk \
+        ghostscript \
         libreoffice-writer \
         libreoffice-calc \
         libreoffice-impress \

@@ -21,6 +21,8 @@ jobs:
       - uses: oven-sh/setup-bun@v2
       - name: Install just
         uses: extractions/setup-just@v3
+      - name: Install Ghostscript (for PDF -> PCL/PS conversion tests)
+        run: sudo apt-get update && sudo apt-get install -y ghostscript
       - name: Run full check chain
         run: just check
 
@@ -41,7 +43,7 @@ jobs:
           tags: just-print:ci
           cache-from: type=gha
           cache-to: type=gha,mode=max
-      - name: Smoke test (health, frontend, LibreOffice)
+      - name: Smoke test (health, frontend, LibreOffice, Ghostscript)
         run: |
           set -euo pipefail
           cid="$(docker run -d --rm -p 127.0.0.1:8080:8080 -e JUST_PRINT_TOKEN=ci-smoke-test just-print:ci)"
@@ -55,8 +57,12 @@ jobs:
           curl -fsS http://127.0.0.1:8080/healthz >/dev/null
           curl -fsS http://127.0.0.1:8080/ | grep -q '<div id="app">'
           docker exec "$cid" soffice --version
+          docker exec "$cid" gs --version
           docker exec -w /tmp "$cid" sh -c \
             'printf "hello" > sample.txt && soffice --headless --convert-to pdf --outdir /tmp /tmp/sample.txt >/dev/null && test -s /tmp/sample.pdf'
+          # Ghostscript：PDF -> PCL5e（ljet4）转换
+          docker exec -w /tmp "$cid" sh -c \
+            'gs -q -dNOPAUSE -dBATCH -sDEVICE=ljet4 -sOutputFile=/tmp/sample.pcl /tmp/sample.pdf && test -s /tmp/sample.pcl'
 
           # API 冒烟：未带令牌必须 401
           test "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8080/api/printers)" = 401

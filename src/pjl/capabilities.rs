@@ -159,12 +159,12 @@ fn insert_pending(variables: &mut BTreeMap<String, Variable>, pending: Pending) 
 
 /// 判断能力表是否声明支持 PDF personality。
 ///
-/// `PERSONALITY` 缺失时按支持处理（部分打印机不报告该变量但实际支持 PDF）；
-/// 明确列出且不含 `PDF` 时返回 `false`。
+/// 只在 `PERSONALITY` 明确列出 `PDF` 时返回 `true`；缺失时返回 `false`
+/// （能力未完整加载，不假定语言，避免向不支持 PDF 的打印机发送 PDF）。
 #[must_use]
 pub fn supports_pdf(capabilities: &BTreeMap<String, Variable>) -> bool {
     let Some(personality) = capabilities.get("PERSONALITY") else {
-        return true;
+        return false;
     };
     let VariableKind::Enumerated { values } = &personality.kind else {
         return true;
@@ -172,11 +172,60 @@ pub fn supports_pdf(capabilities: &BTreeMap<String, Variable>) -> bool {
     values.iter().any(|value| value == "PDF")
 }
 
+/// 判断能力表是否声明支持 PCL personality。
+///
+/// `PERSONALITY` 明确列出 `PCL` 时返回 `true`；缺失时返回 `false`（此时 PDF
+/// 假定受支持，回退语言无意义）。
+#[must_use]
+pub fn supports_pcl(capabilities: &BTreeMap<String, Variable>) -> bool {
+    let Some(personality) = capabilities.get("PERSONALITY") else {
+        return false;
+    };
+    let VariableKind::Enumerated { values } = &personality.kind else {
+        return false;
+    };
+    values.iter().any(|value| value == "PCL")
+}
+
+/// 判断能力表是否声明支持 PostScript personality。
+///
+/// 只在 `PERSONALITY` 明确列出 `POSTSCRIPT` 时返回 `true`；能力未知或缺失时
+/// 返回 `false`（此时 PDF 假定受支持，回退语言无意义）。
+#[must_use]
+pub fn supports_postscript(capabilities: &BTreeMap<String, Variable>) -> bool {
+    let Some(personality) = capabilities.get("PERSONALITY") else {
+        return false;
+    };
+    let VariableKind::Enumerated { values } = &personality.kind else {
+        return false;
+    };
+    values.iter().any(|value| value == "POSTSCRIPT")
+}
+
+/// 选择打印语言：优先 PDF，其次 PCL，再其次 PostScript；都不支持时返回 `None`。
+#[must_use]
+pub fn print_language(capabilities: &BTreeMap<String, Variable>) -> Option<&'static str> {
+    if !capabilities.contains_key("PERSONALITY") {
+        return None;
+    }
+    if supports_pdf(capabilities) {
+        Some("PDF")
+    } else if supports_pcl(capabilities) {
+        Some("PCL")
+    } else if supports_postscript(capabilities) {
+        Some("POSTSCRIPT")
+    } else {
+        None
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeMap;
 
-    use super::{parse_info_variables, supports_pdf};
+    use super::{
+        parse_info_variables, print_language, supports_pcl, supports_pdf, supports_postscript,
+    };
     use crate::pjl::{Variable, VariableKind};
 
     #[test]
@@ -228,6 +277,27 @@ LPARM:EPSON ORIENTATION=PORTRAIT [2 ENUMERATED]
         let output = "PERSONALITY=LABEL [2 ENUMERATED]\r\n\tPCL\r\n\tPOSTSCRIPT\r\n";
         let vars = parse_info_variables(output);
         assert!(!supports_pdf(&vars));
+    }
+
+    #[test]
+    fn personality_with_auto_is_not_pdf_supported() {
+        let mut vars = BTreeMap::new();
+        vars.insert(
+            "PERSONALITY".to_string(),
+            Variable {
+                default: Some("LABEL".to_string()),
+                kind: VariableKind::Enumerated {
+                    values: vec![
+                        "PCL".to_string(),
+                        "POSTSCRIPT".to_string(),
+                        "AUTO".to_string(),
+                    ],
+                },
+            },
+        );
+        assert!(!supports_pdf(&vars));
+        assert!(supports_pcl(&vars));
+        assert_eq!(print_language(&vars), Some("PCL"));
     }
 
     #[test]
@@ -317,11 +387,14 @@ ECONOMODE=ON [2 ENUMERATED]
         assert!(vars.contains_key("LPARM:EPSON ORIENTATION"));
         assert!(vars.contains_key("MEDIATYPE"));
         assert!(vars.contains_key("ECONOMODE"));
-        assert!(!supports_pdf(&vars));
+        assert!(!supports_pdf(&vars)); // AUTO 不保证支持 PDF
+        assert!(supports_pcl(&vars));
+        assert!(supports_postscript(&vars));
+        assert_eq!(print_language(&vars), Some("PCL"));
     }
 
     #[test]
-    fn personality_missing_is_treated_as_pdf_supported() {
+    fn personality_missing_is_not_supported() {
         let mut vars = BTreeMap::new();
         vars.insert(
             "DUPLEX".to_string(),
@@ -332,6 +405,71 @@ ECONOMODE=ON [2 ENUMERATED]
                 },
             },
         );
-        assert!(supports_pdf(&vars));
+        assert!(!supports_pdf(&vars));
+        assert!(!supports_pcl(&vars));
+        assert!(!supports_postscript(&vars));
+        assert_eq!(print_language(&vars), None);
+    }
+
+    #[test]
+    fn language_preference_and_detection() {
+        let mut vars = BTreeMap::new();
+        // PCL 优先于 PostScript。
+        vars.insert(
+            "PERSONALITY".to_string(),
+            Variable {
+                default: Some("LABEL".to_string()),
+                kind: VariableKind::Enumerated {
+                    values: vec!["PCL".to_string(), "POSTSCRIPT".to_string()],
+                },
+            },
+        );
+        assert!(!supports_pdf(&vars));
+        assert!(supports_pcl(&vars));
+        assert!(supports_postscript(&vars));
+        assert_eq!(print_language(&vars), Some("PCL"));
+
+        // 仅 PostScript 时回退 PostScript。
+        vars.insert(
+            "PERSONALITY".to_string(),
+            Variable {
+                default: Some("LABEL".to_string()),
+                kind: VariableKind::Enumerated {
+                    values: vec!["POSTSCRIPT".to_string()],
+                },
+            },
+        );
+        assert!(!supports_pdf(&vars));
+        assert!(!supports_pcl(&vars));
+        assert!(supports_postscript(&vars));
+        assert_eq!(print_language(&vars), Some("POSTSCRIPT"));
+
+        // PDF 优先级最高。
+        vars.insert(
+            "PERSONALITY".to_string(),
+            Variable {
+                default: Some("LABEL".to_string()),
+                kind: VariableKind::Enumerated {
+                    values: vec![
+                        "PCL".to_string(),
+                        "PDF".to_string(),
+                        "POSTSCRIPT".to_string(),
+                    ],
+                },
+            },
+        );
+        assert_eq!(print_language(&vars), Some("PDF"));
+
+        // 都不支持。
+        vars.insert(
+            "PERSONALITY".to_string(),
+            Variable {
+                default: Some("LABEL".to_string()),
+                kind: VariableKind::Enumerated {
+                    values: vec!["IBM".to_string(), "EPSON".to_string()],
+                },
+            },
+        );
+        assert_eq!(print_language(&vars), None);
     }
 }
