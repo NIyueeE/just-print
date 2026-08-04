@@ -8,7 +8,7 @@ import { TokenGate } from './components/TokenGate'
 import { Uploader } from './components/Uploader'
 import { PrinterPanel } from './components/PrinterPanel'
 import { JobList } from './components/JobList'
-import { CheckIcon, LogoMark, LogoutIcon } from './icons'
+import { CheckIcon, GitHubIcon, LogoMark, LogoutIcon } from './icons'
 import './app.css'
 
 export function App() {
@@ -59,10 +59,22 @@ export function App() {
             <span class="tagline">CUPS 驱动 · 文档打印服务</span>
           </div>
         </div>
-        <button type="button" class="ghost" onClick={handleAuthFailure}>
-          <LogoutIcon size={16} />
-          退出登录
-        </button>
+        <div class="header-actions">
+          <a
+            class="ghost github-link"
+            href="https://github.com/NIyueeE/just-print"
+            target="_blank"
+            rel="noreferrer"
+            aria-label="Just Print GitHub 仓库"
+            title="Just Print GitHub 仓库"
+          >
+            <GitHubIcon size={18} />
+          </a>
+          <button type="button" class="ghost" onClick={handleAuthFailure}>
+            <LogoutIcon size={16} />
+            退出登录
+          </button>
+        </div>
       </header>
       <main class="app-main">
         <Uploader
