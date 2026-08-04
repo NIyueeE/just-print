@@ -22,8 +22,9 @@ interface JobView {
 const STATUS_LABEL: Record<JobStatus, string> = {
   queued: '排队中',
   printing: '打印中',
-  success: '成功',
+  completed: '已完成',
   failed: '失败',
+  canceled: '已取消',
 }
 
 function formatTime(ms: number): string {
@@ -63,7 +64,11 @@ export function JobList({ jobs, onAuthFailure, onRestart }: JobListProps) {
               createdAtMs: job.created_at_ms,
             },
           }))
-          if (job.status === 'success' || job.status === 'failed') {
+          if (
+            job.status === 'completed' ||
+            job.status === 'failed' ||
+            job.status === 'canceled'
+          ) {
             finishedRef.current.add(id)
           }
         } catch (requestError) {
@@ -114,7 +119,7 @@ export function JobList({ jobs, onAuthFailure, onRestart }: JobListProps) {
                   <ClockIcon size={16} />
                 ) : status === 'printing' ? (
                   <SpinnerIcon size={16} />
-                ) : status === 'success' ? (
+                ) : status === 'completed' ? (
                   <CheckIcon size={16} />
                 ) : (
                   <AlertIcon size={16} />

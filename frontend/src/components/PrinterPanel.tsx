@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'preact/hooks'
 import type { JSX } from 'preact'
 import {
-  type CapabilityView,
+  type OptionView,
   type Printer,
   type UploadResult,
   errorMessage,
@@ -27,26 +27,40 @@ interface PrinterPanelProps {
 
 function defaultsFor(printer: Printer): Record<string, string> {
   const result: Record<string, string> = {}
-  const capabilities = printer.capabilities ?? {}
-  for (const [key, cap] of Object.entries(capabilities)) {
-    if (cap.default !== null && cap.default !== undefined) {
-      result[key] = cap.default
-    } else if (cap.kind === 'enumerated' && cap.values && cap.values.length > 0) {
-      result[key] = cap.values[0]
-    } else if (cap.kind === 'range' && cap.min !== undefined) {
-      result[key] = String(cap.min)
+  for (const [key, option] of Object.entries(printer.options)) {
+    if (option.default !== null && option.default !== undefined) {
+      result[key] = option.default
+    } else if (option.kind === 'enumerated' && option.values && option.values.length > 0) {
+      result[key] = option.values[0]
+    } else if (option.kind === 'range' && option.min !== undefined) {
+      result[key] = String(option.min)
     }
   }
   return result
 }
 
 const CONTROL_LABELS: Record<string, string> = {
-  DUPLEX: '双面打印',
-  BINDING: '翻页装订',
-  ECONOMODE: '省墨模式',
-  DENSITY: '墨水浓度',
-  MEDIATYPE: '纸张类型',
-  RESOLUTION: '打印分辨率',
+  PageSize: '纸张大小',
+  media: '纸张',
+  Duplex: '双面打印',
+  sides: '单双面',
+  ColorModel: '颜色',
+  cupsPrintQuality: '打印质量',
+  PrintQuality: '打印质量',
+  Resolution: '分辨率',
+  copies: '份数',
+  NumberUp: '每页版面',
+  Collate: '逐份打印',
+  InputSlot: '进纸盒',
+  MediaType: '纸张类型',
+  OutputMode: '输出模式',
+}
+
+const STATE_LABELS: Record<string, string> = {
+  idle: '空闲',
+  printing: '打印中',
+  disabled: '已禁用',
+  stopped: '已停止',
 }
 
 export function PrinterPanel({
@@ -83,13 +97,7 @@ export function PrinterPanel({
         if (previous && result.printers.some((printer) => printer.id === previous)) {
           return previous
         }
-        const first =
-          result.printers.find(
-            (printer) =>
-              printer.pdf_supported ||
-              printer.postscript_supported ||
-              printer.pcl_supported,
-          ) ?? result.printers[0]
+        const first = result.printers[0]
         return first ? first.id : ''
       })
     } catch (requestError) {
@@ -113,9 +121,9 @@ export function PrinterPanel({
     setControls((previous) => ({ ...previous, [key]: value }))
   }
 
-  function renderControl(key: string, cap: CapabilityView): JSX.Element | null {
-    if (cap.kind === 'enumerated') {
-      const options = cap.values ?? []
+  function renderControl(key: string, option: OptionView): JSX.Element | null {
+    if (option.kind === 'enumerated') {
+      const options = option.values ?? []
       if (options.length === 0) {
         return null
       }
@@ -133,8 +141,8 @@ export function PrinterPanel({
         </select>
       )
     }
-    const min = cap.min ?? 0
-    const max = cap.max ?? 100
+    const min = option.min ?? 0
+    const max = option.max ?? 100
     return (
       <input
         type="number"
@@ -148,29 +156,10 @@ export function PrinterPanel({
   }
 
   const selected = printers.find((printer) => printer.id === selectedId) ?? null
-  const canPrint =
-    upload !== null &&
-    selected !== null &&
-    (selected.pdf_supported ||
-      selected.postscript_supported ||
-      selected.pcl_supported) &&
-    selected.capabilities !== null &&
-    !busy
+  const canPrint = upload !== null && selected !== null && !busy
 
   async function handlePrint(): Promise<void> {
     if (!upload || !selected || busy) {
-      return
-    }
-    if (selected.capabilities === null) {
-      setError('打印机能力尚未加载，请稍候')
-      return
-    }
-    if (
-      !selected.pdf_supported &&
-      !selected.pcl_supported &&
-      !selected.postscript_supported
-    ) {
-      setError('打印机不支持 PDF / PCL / PostScript 输出')
       return
     }
     setBusy(true)
@@ -180,10 +169,10 @@ export function PrinterPanel({
       const result = await submitPrint({
         file_id: upload.id,
         printer_id: selected.id,
-        controls,
+        options: controls,
       })
       onJobSubmitted(result.job_id)
-      onNotice('打印任务已提交')
+      onNotice('打印任务已提交给 CUPS')
     } catch (requestError) {
       if (isUnauthorized(requestError)) {
         onAuthFailure()
@@ -206,7 +195,7 @@ export function PrinterPanel({
       {printers.length === 0 ? (
         <div class="hint">
           <RefreshIcon size={15} className="refresh-spin" />
-          <span>未发现打印机。请确认设备已通过 /dev/usb/lp* 映射到容器，服务会每 5 秒自动重试。</span>
+          <span>未发现打印机。请先在 CUPS 中配置打印机（容器内可用 JUST_PRINT_CUPS_PDF=1 添加 CUPS-PDF 调试打印机），服务会每 5 秒自动重试。</span>
         </div>
       ) : (
         <>
@@ -219,7 +208,7 @@ export function PrinterPanel({
               {printers.map((printer) => (
                 <option key={printer.id} value={printer.id}>
                   {printer.name}
-                  {printer.serial ? `（${printer.serial}）` : ''}
+                  {printer.state ? `（${STATE_LABELS[printer.state] ?? printer.state}）` : ''}
                 </option>
               ))}
             </select>
@@ -227,60 +216,26 @@ export function PrinterPanel({
           {selected ? (
             <div class="printer-summary">
               <span class="printer-name">{selected.name}</span>
-              {selected.manufacturer ? (
-                <span class="printer-detail">{selected.manufacturer}</span>
-              ) : null}
-              {selected.serial ? (
-                <span class="printer-detail">SN {selected.serial}</span>
-              ) : null}
-              {selected.pdf_supported ? (
-                <span class="lang-badge lang-pdf">PDF</span>
-              ) : null}
-              {selected.pcl_supported ? (
-                <span class="lang-badge lang-pcl">PCL</span>
-              ) : null}
-              {selected.postscript_supported ? (
-                <span class="lang-badge lang-ps">PostScript</span>
+              {selected.state ? (
+                <span class={`lang-badge state-${selected.state}`}>
+                  {STATE_LABELS[selected.state] ?? selected.state}
+                </span>
               ) : null}
             </div>
           ) : null}
-          {selected &&
-          !selected.pdf_supported &&
-          !selected.pcl_supported &&
-          !selected.postscript_supported ? (
-            <p class="error">
-              <AlertIcon size={15} />
-              该打印机不支持 PDF / PCL / PostScript 输出，无法打印。
-            </p>
-          ) : null}
-          {selected && !selected.pdf_supported && selected.pcl_supported ? (
+          {selected && Object.keys(selected.options).length === 0 ? (
             <div class="hint">
               <InfoIcon size={15} />
-              <span>该打印机不支持 PDF，将使用 PCL 打印。</span>
+              <span>该打印机没有可用的 CUPS 选项，将以默认设置打印。</span>
             </div>
           ) : null}
-          {selected &&
-          !selected.pdf_supported &&
-          !selected.pcl_supported &&
-          selected.postscript_supported ? (
-            <div class="hint">
-              <InfoIcon size={15} />
-              <span>该打印机不支持 PDF，将使用 PostScript 打印。</span>
-            </div>
-          ) : null}
-          {selected && selected.capabilities === null ? (
-            <div class="hint">
-              <SpinnerIcon size={15} />
-              <span>打印机能力加载中…</span>
-            </div>
-          ) : null}
-          {selected && selected.capabilities ? (
+          {selected && Object.keys(selected.options).length > 0 ? (
             <div class="controls">
-              {Object.entries(selected.capabilities).map(([key, cap]) => (
+              {Object.entries(selected.options).map(([key, option]) => (
                 <label class="field" key={key}>
                   <span class="field-label">{CONTROL_LABELS[key] ?? key}</span>
                   <span class="field-name">{key}</span>
-                  {renderControl(key, cap)}
+                  {renderControl(key, option)}
                 </label>
               ))}
             </div>

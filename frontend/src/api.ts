@@ -8,7 +8,7 @@ export interface UploadResult {
   size: number
 }
 
-export interface CapabilityView {
+export interface OptionView {
   default: string | null
   kind: 'enumerated' | 'range'
   values?: string[]
@@ -19,12 +19,8 @@ export interface CapabilityView {
 export interface Printer {
   id: string
   name: string
-  manufacturer: string | null
-  serial: string | null
-  pdf_supported: boolean
-  postscript_supported: boolean
-  pcl_supported: boolean
-  capabilities: Record<string, CapabilityView> | null
+  state: string | null
+  options: Record<string, OptionView>
 }
 
 export interface PrinterList {
@@ -35,7 +31,7 @@ export interface PrintResult {
   job_id: string
 }
 
-export type JobStatus = 'queued' | 'printing' | 'success' | 'failed'
+export type JobStatus = 'queued' | 'printing' | 'completed' | 'failed' | 'canceled'
 
 export interface Job {
   id: string
@@ -121,7 +117,7 @@ export async function listPrinters(): Promise<PrinterList> {
 export async function submitPrint(payload: {
   file_id: string
   printer_id: string
-  controls: Record<string, string>
+  options: Record<string, string>
 }): Promise<PrintResult> {
   return request<PrintResult>('/api/print', {
     method: 'POST',

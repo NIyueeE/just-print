@@ -441,21 +441,22 @@
   padding: 1px 8px;
 }
 
-.lang-pdf {
-  background: rgb(251 73 52 / 0.1);
-  border-color: rgb(251 73 52 / 0.28);
-  color: var(--red);
-}
-
-.lang-pcl {
+.state-idle {
   background: rgb(131 165 152 / 0.1);
   border-color: rgb(131 165 152 / 0.3);
   color: var(--blue);
 }
 
-.lang-ps {
+.state-printing {
+  background: rgb(215 153 33 / 0.1);
+  border-color: rgb(215 153 33 / 0.3);
+  color: var(--yellow);
+}
+
+.state-disabled,
+.state-stopped {
   background: rgb(211 134 155 / 0.1);
-  border-color: rgb(211 134 155 / 0.28);
+  border-color: rgb(251 73 52 / 0.3);
   color: var(--purple);
 }
 

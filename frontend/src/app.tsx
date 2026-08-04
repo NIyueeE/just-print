@@ -56,7 +56,7 @@ export function App() {
           </span>
           <div class="brand-text">
             <h1>Just Print</h1>
-            <span class="tagline">轻量打印服务 · PJL 直连</span>
+            <span class="tagline">CUPS 驱动 · 文档打印服务</span>
           </div>
         </div>
         <button type="button" class="ghost" onClick={handleAuthFailure}>
