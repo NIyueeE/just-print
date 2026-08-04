@@ -197,10 +197,14 @@ just init-hooks
 | 格式 | 处理方式 |
 | --- | --- |
 | `.pdf` | 校验后原样通过 |
-| `.docx` / `.xlsx` / `.pptx` | LibreOffice（soffice）转换为 PDF |
-| `.odt` / `.ods` / `.odp` | LibreOffice（soffice）转换为 PDF |
-| `.md` / `.txt` | LibreOffice（soffice）转换为 PDF |
-| 其它（含 `.doc` / `.xls` / `.ppt`、`.html`、`.csv` 等） | 返回 415 |
+| Word / Excel / PowerPoint（含旧版与模板） | LibreOffice（soffice）转换为 PDF |
+| OpenDocument（Writer / Calc / Impress / Draw） | LibreOffice（soffice）转换为 PDF |
+| 图片（PNG / JPG / WebP / TIFF / BMP / SVG 等） | LibreOffice（soffice）转换为 PDF |
+| 文本与网页（Markdown / TXT / CSV / HTML / RTF 等） | LibreOffice（soffice）转换为 PDF |
+| 其它 LibreOffice 可导入格式（共 171 种扩展名） | LibreOffice（soffice）转换为 PDF |
+
+白名单与镜像内置 LibreOffice 7.4.7 注册的 `IMPORT` 过滤器一致（另保留
+Markdown），完整扩展名列表见 [docs/api.md](docs/api.md)。
 
 ## 文档转换
 
@@ -229,7 +233,7 @@ just init-hooks
 ## 已知限制
 
 - 仅支持 Linux。
-- 仅支持「支持的上传格式」列出的格式；旧版二进制格式（`.doc` / `.xls` / `.ppt`）不在 v1 范围。
+- 仅支持「支持的上传格式」列出的 171 种扩展名；未列出的格式返回 `415`。
 - 打印机兼容性取决于 CUPS 后端、驱动与 PPD；不支持 IPP Everywhere 且没有可用 PPD 的老式打印机可能无法提供控制项，或只能 raw 打印。
 - 控制项仅限 CUPS 提供的常见选项，不再查询或透传打印机私有 PJL 变量（如省墨、墨浓度等）。
 - 容器内 USB 热插拔能力有限，新增设备通常需要宿主 udev 配合或重启容器。

@@ -35,8 +35,27 @@
 
 `multipart/form-data`，字段名为 `file`，最大 64 MiB。
 
-支持扩展名：`.pdf`、`.docx`、`.xlsx`、`.pptx`、`.odt`、`.ods`、`.odp`、`.md`、
-`.txt`。`.pdf` 校验后原样通过；其它格式由镜像内置 LibreOffice 转换为 PDF。
+支持扩展名（与镜像内置 LibreOffice 7.4.7 注册的 `IMPORT` 过滤器一致，共 171 个）：
+`.123`、`.602`、`.abw`、`.bmp`、`.cdr`、`.cgm`、`.cmx`、`.csv`、`.cwk`、
+`.dbf`、`.dif`、`.doc`、`.docm`、`.docx`、`.dot`、`.dotm`、`.dotx`、`.dps`、
+`.dpt`、`.dxf`、`.emf`、`.emz`、`.eps`、`.et`、`.ett`、`.fb2`、`.fh`、`.fh1`、
+`.fh10`、`.fh11`、`.fh2`、`.fh3`、`.fh4`、`.fh5`、`.fh6`、`.fh7`、`.fh8`、
+`.fh9`、`.fodg`、`.fodp`、`.fods`、`.fodt`、`.gif`、`.gnm`、`.gnumeric`、
+`.htm`、`.html`、`.hwp`、`.jfif`、`.jif`、`.jpe`、`.jpeg`、`.jpg`、`.key`、
+`.lrf`、`.lwp`、`.mcw`、`.md`、`.met`、`.mov`、`.mp`、`.mw`、`.mwd`、
+`.numbers`、`.nx^d`、`.odc`、`.odg`、`.odm`、`.odp`、`.ods`、`.odt`、`.otg`、
+`.oth`、`.otm`、`.otp`、`.ots`、`.ott`、`.p65`、`.pages`、`.pbm`、`.pcd`、
+`.pct`、`.pcx`、`.pdb`、`.pdf`、`.pgm`、`.pict`、`.pm`、`.pm6`、`.pmd`、
+`.png`、`.pot`、`.potm`、`.potx`、`.ppm`、`.pps`、`.ppsx`、`.ppt`、`.pptm`、
+`.pptx`、`.psd`、`.psw`、`.pub`、`.qxd`、`.qxt`、`.ras`、`.rtf`、`.sda`、
+`.sdc`、`.sdd`、`.sdw`、`.slk`、`.stc`、`.std`、`.sti`、`.stw`、`.svg`、
+`.svgz`、`.svm`、`.sxc`、`.sxd`、`.sxg`、`.sxi`、`.sxs`、`.sxw`、`.sylk`、
+`.tab`、`.tga`、`.tif`、`.tiff`、`.tsv`、`.vdx`、`.vsd`、`.vsdm`、`.vsdx`、
+`.wb1`、`.wb2`、`.wdb`、`.webp`、`.wk1`、`.wk3`、`.wk4`、`.wks`、`.wmf`、
+`.wmz`、`.wn`、`.wpd`、`.wpg`、`.wps`、`.wpt`、`.wq1`、`.wq2`、`.wri`、
+`.xbm`、`.xhtml`、`.xlc`、`.xlk`、`.xlm`、`.xls`、`.xlsb`、`.xlsm`、`.xlsx`、
+`.xlt`、`.xltm`、`.xltx`、`.xlw`、`.xml`、`.xpm`、`.zabw`、`.zip`、`.zmf`。
+`.pdf` 校验后原样通过；其它格式由镜像内置 LibreOffice 转换为 PDF。
 
 成功（`201 Created`）：
 

@@ -1,4 +1,5 @@
 //! 文档转 `PDF`：`PDF` 原样校验，其余格式由镜像内置 `LibreOffice` 转换。
+//! 白名单与镜像内 `LibreOffice` 7.4.7 注册的 `IMPORT` 过滤器一致。
 
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
@@ -7,9 +8,22 @@ use std::time::Duration;
 use thiserror::Error;
 use tokio::process::Command;
 
-/// 支持的上传扩展名。
-pub const SUPPORTED_EXTENSIONS: [&str; 9] = [
-    "pdf", "docx", "xlsx", "pptx", "odt", "ods", "odp", "md", "txt",
+/// 支持的上传扩展名（含镜像内 `LibreOffice` 可导入的全部格式与 Markdown）。
+pub const SUPPORTED_EXTENSIONS: [&str; 171] = [
+    "123", "602", "abw", "bmp", "cdr", "cgm", "cmx", "csv", "cwk", "dbf", "dif", "doc", "docm",
+    "docx", "dot", "dotm", "dotx", "dps", "dpt", "dxf", "emf", "emz", "eps", "et", "ett", "fb2",
+    "fh", "fh1", "fh10", "fh11", "fh2", "fh3", "fh4", "fh5", "fh6", "fh7", "fh8", "fh9", "fodg",
+    "fodp", "fods", "fodt", "gif", "gnm", "gnumeric", "htm", "html", "hwp", "jfif", "jif", "jpe",
+    "jpeg", "jpg", "key", "lrf", "lwp", "mcw", "md", "met", "mov", "mp", "mw", "mwd", "numbers",
+    "nx^d", "odc", "odg", "odm", "odp", "ods", "odt", "otg", "oth", "otm", "otp", "ots", "ott",
+    "p65", "pages", "pbm", "pcd", "pct", "pcx", "pdb", "pdf", "pgm", "pict", "pm", "pm6", "pmd",
+    "png", "pot", "potm", "potx", "ppm", "pps", "ppsx", "ppt", "pptm", "pptx", "psd", "psw", "pub",
+    "qxd", "qxt", "ras", "rtf", "sda", "sdc", "sdd", "sdw", "slk", "stc", "std", "sti", "stw",
+    "svg", "svgz", "svm", "sxc", "sxd", "sxg", "sxi", "sxs", "sxw", "sylk", "tab", "tga", "tif",
+    "tiff", "tsv", "vdx", "vsd", "vsdm", "vsdx", "wb1", "wb2", "wdb", "webp", "wk1", "wk3", "wk4",
+    "wks", "wmf", "wmz", "wn", "wpd", "wpg", "wps", "wpt", "wq1", "wq2", "wri", "xbm", "xhtml",
+    "xlc", "xlk", "xlm", "xls", "xlsb", "xlsm", "xlsx", "xlt", "xltm", "xltx", "xlw", "xml", "xpm",
+    "zabw", "zip", "zmf",
 ];
 
 /// `LibreOffice` 并发转换上限（`CPU` 密集操作）。
@@ -151,5 +165,14 @@ mod tests {
     fn extension_list_is_stable() {
         assert!(SUPPORTED_EXTENSIONS.contains(&"pdf"));
         assert!(SUPPORTED_EXTENSIONS.contains(&"docx"));
+        assert!(SUPPORTED_EXTENSIONS.contains(&"doc"));
+        assert!(SUPPORTED_EXTENSIONS.contains(&"xls"));
+        assert!(SUPPORTED_EXTENSIONS.contains(&"ppt"));
+        assert!(SUPPORTED_EXTENSIONS.contains(&"csv"));
+        assert!(SUPPORTED_EXTENSIONS.contains(&"html"));
+        assert!(SUPPORTED_EXTENSIONS.contains(&"rtf"));
+        assert!(SUPPORTED_EXTENSIONS.contains(&"png"));
+        assert!(SUPPORTED_EXTENSIONS.contains(&"jpg"));
+        assert!(SUPPORTED_EXTENSIONS.contains(&"webp"));
     }
 }
