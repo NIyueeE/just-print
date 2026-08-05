@@ -14,6 +14,9 @@
 | `just debug` | 构建并以 `JUST_PRINT_CUPS_PDF=1` 前台运行调试容器（需先设置 `JUST_PRINT_TOKEN`） |
 | `cd frontend && bun run dev` | 启动 Vite 开发服务器 |
 
+开发服务器会把 `/api` 代理到 `http://localhost:8080`，联调接口时先启动后端
+（`cargo run` 或 `just debug`）并设置 `JUST_PRINT_TOKEN`。
+
 ## 提交钩子
 
 首次克隆后执行一次以下命令，即可让每次 `git commit` 前自动运行 `just check`：

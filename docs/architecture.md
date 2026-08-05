@@ -51,8 +51,13 @@ just-print/
 ## 文档转换
 
 - 镜像内置 LibreOffice Writer / Calc / Impress / Draw 组件与
-  `fonts-noto-cjk`、`fonts-liberation`，无需在宿主机安装 LibreOffice。
+  `fonts-noto-cjk`（中文）、`fonts-liberation`（西文）、`fonts-symbola`
+  （表情符号单色字形）与 `poppler-utils`，无需在宿主机安装 LibreOffice。
 - `.pdf` 只校验 `%PDF-` 魔数后原样通过，不重新转换。
+- `.md` 先用 `pulldown-cmark` 解析并渲染为带打印样式的 `HTML`（标题、代码块、
+  表格、引用等；原文中的原始 `HTML` 一律转义），再交给 `LibreOffice` 转换，
+  避免以纯文本源码打印。为规避 `LibreOffice` 7.4 会吞掉正文首段的导入缺陷，
+  渲染器会前置一个不可见的占位段落。
 - 其它格式通过 `soffice --headless --convert-to pdf` 子进程转换。
 - 白名单与镜像内置 LibreOffice 7.4.7 注册的 `IMPORT` 过滤器一致，另保留
   Markdown 与纯文本，共 172 个扩展名；完整列表见 [api.md](api.md)。
@@ -61,6 +66,8 @@ just-print/
   冲突；同时用信号量限制最多 2 个并发转换。
 - 单次转换默认超时 2 分钟；soffice 缺失、非零退出、超时或未生成有效输出时返回
   `422 conversion_failed`。
+- 预览接口流式返回转换后的 PDF（`Content-Length` 已知），大文件不会整体载入
+  内存。
 - 转换以容器内 LibreOffice 版本为准；与 Microsoft Office / WPS 的排版细节可能
   存在差异。
 

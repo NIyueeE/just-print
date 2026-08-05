@@ -58,7 +58,8 @@
 `.wmz`、`.wn`、`.wpd`、`.wpg`、`.wps`、`.wpt`、`.wq1`、`.wq2`、`.wri`、
 `.xbm`、`.xhtml`、`.xlc`、`.xlk`、`.xlm`、`.xls`、`.xlsb`、`.xlsm`、`.xlsx`、
 `.xlt`、`.xltm`、`.xltx`、`.xlw`、`.xml`、`.xpm`、`.zabw`、`.zip`、`.zmf`。
-`.pdf` 校验后原样通过；其它格式由镜像内置 LibreOffice 转换为 PDF。
+`.pdf` 校验后原样通过；`.md` 先渲染为带打印样式的 HTML（原始 HTML 一律转义）
+再转换；其它格式由镜像内置 LibreOffice 转换为 PDF。
 
 成功（`201 Created`）：
 
@@ -70,12 +71,12 @@
 }
 ```
 
-失败：`400`（缺少文件字段）、`413`（过大）、`415`（格式不支持）、
+失败：`400`（缺少文件字段或文件为空）、`413`（过大）、`415`（格式不支持）、
 `422`（转换失败）。
 
 ## GET /api/files/{id}
 
-返回转换后的 PDF 字节流，`Content-Type: application/pdf`，
+流式返回转换后的 PDF（带 `Content-Length`），`Content-Type: application/pdf`，
 `Content-Disposition: inline; filename="preview.pdf"`。文件不存在返回 `404`。
 
 ## GET /api/printers
