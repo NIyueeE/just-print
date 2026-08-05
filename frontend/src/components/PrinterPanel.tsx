@@ -25,10 +25,52 @@ interface PrinterPanelProps {
   onNotice: (message: string | null) => void
 }
 
+/** 常用打印偏好：A4 纸张、最大分辨率、双面长边装订。 */
+function preferredValue(key: string, option: OptionView): string | null {
+  if (option.kind === 'enumerated') {
+    const values = option.values ?? []
+    const normalized = values.map((value) => value.toLowerCase())
+    if (key === 'PageSize' || key === 'media') {
+      const a4 = normalized.indexOf('a4')
+      return a4 !== -1 ? values[a4] : null
+    }
+    if (key === 'Duplex' || key === 'sides') {
+      const duplex = ['duplexnotumble', 'two-sided-long-edge', 'longedge', 'duplex']
+        .map((value) => normalized.indexOf(value))
+        .find((index) => index !== -1)
+      return duplex !== undefined ? values[duplex] : null
+    }
+    if (/binding/i.test(key)) {
+      const longEdge = normalized.indexOf('longedge')
+      return longEdge !== -1 ? values[longEdge] : null
+    }
+    if (/resolution|dpi/i.test(key)) {
+      let best: string | null = null
+      let bestDpi = -1
+      for (const value of values) {
+        const dpi = Number.parseInt(value, 10)
+        if (Number.isFinite(dpi) && dpi > bestDpi) {
+          bestDpi = dpi
+          best = value
+        }
+      }
+      return best
+    }
+    return null
+  }
+  if (option.kind === 'range' && /resolution|dpi/i.test(key) && option.max !== undefined) {
+    return String(option.max)
+  }
+  return null
+}
+
 function defaultsFor(printer: Printer): Record<string, string> {
   const result: Record<string, string> = {}
   for (const [key, option] of Object.entries(printer.options)) {
-    if (option.default !== null && option.default !== undefined) {
+    const preferred = preferredValue(key, option)
+    if (preferred !== null) {
+      result[key] = preferred
+    } else if (option.default !== null && option.default !== undefined) {
       result[key] = option.default
     } else if (option.kind === 'enumerated' && option.values && option.values.length > 0) {
       result[key] = option.values[0]
