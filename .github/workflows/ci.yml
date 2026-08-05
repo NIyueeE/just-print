@@ -20,7 +20,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - uses: oven-sh/setup-bun@v2
       - name: Install just
-        uses: extractions/setup-just@v3
+        uses: extractions/setup-just@v4
       - name: Run full check chain
         run: just check
 
