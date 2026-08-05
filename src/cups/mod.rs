@@ -269,17 +269,22 @@ fn parse_printers(output: &str) -> Result<Vec<PrinterInfo>, String> {
     for line in output.lines() {
         let trimmed = line.trim();
         if let Some(rest) = trimmed.strip_prefix("printer ") {
-            let (name, state_part) = rest
-                .split_once(" is ")
-                .ok_or_else(|| format!("无法解析打印机行: {line}"))?;
-            let state = state_part
-                .split_whitespace()
-                .next()
-                .unwrap_or("unknown")
-                .trim_end_matches('.')
-                .to_string();
+            // lpstat -p 的行有几种形态：
+            //   printer NAME is idle.  enabled since ...
+            //   printer NAME now printing NAME-123.  enabled since ...
+            //   printer NAME disabled since ... / stopped since ...
+            let mut words = rest.split_whitespace();
+            let name = words.next().unwrap_or_default().to_string();
+            let state = match words.next() {
+                Some("is" | "now") => words.next(),
+                Some(other) => Some(other),
+                None => None,
+            }
+            .unwrap_or("unknown")
+            .trim_end_matches('.')
+            .to_string();
             printers.push(PrinterInfo {
-                name: name.trim().to_string(),
+                name,
                 state,
                 description: None,
             });
@@ -497,6 +502,42 @@ printer Office is printing.  enabled since Mon 03 Aug 2026 08:00:00 UTC
         assert!(second.is_some());
         if let Some(second) = second {
             assert_eq!(second.state, "printing");
+        }
+    }
+
+    #[test]
+    fn parses_now_printing_disabled_and_stopped_states() {
+        let output = "\
+printer usb-lj4000d-00000lp05609863 now printing usb-lj4000d-00000lp05609863-2. enabled since Wed Aug 5 11:30:50 2026
+\tDescription: LJ4000D via USB
+
+printer Office disabled since Mon 03 Aug 2026 08:00:00 UTC
+\tDescription: Network Office Printer
+
+printer Label stopped since Mon 03 Aug 2026 08:00:00 UTC
+\tDescription: Label Printer
+";
+        let result = parse_printers(output);
+        assert!(result.is_ok());
+        let Ok(printers) = result else {
+            return;
+        };
+        assert_eq!(printers.len(), 3);
+        let first = printers.first();
+        assert!(first.is_some());
+        if let Some(first) = first {
+            assert_eq!(first.name, "usb-lj4000d-00000lp05609863");
+            assert_eq!(first.state, "printing");
+        }
+        let second = printers.get(1);
+        assert!(second.is_some());
+        if let Some(second) = second {
+            assert_eq!(second.state, "disabled");
+        }
+        let third = printers.get(2);
+        assert!(third.is_some());
+        if let Some(third) = third {
+            assert_eq!(third.state, "stopped");
         }
     }
 
