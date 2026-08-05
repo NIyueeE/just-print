@@ -7,14 +7,14 @@ import {
 import { TokenGate } from './components/TokenGate'
 import { Uploader } from './components/Uploader'
 import { PrinterPanel } from './components/PrinterPanel'
-import { JobList } from './components/JobList'
+import { JobList, type JobEntry } from './components/JobList'
 import { CheckIcon, GitHubIcon, LogoMark, LogoutIcon } from './icons'
 import './app.css'
 
 export function App() {
   const [token, setToken] = useState<string>(() => getStoredToken())
   const [upload, setUpload] = useState<UploadResult | null>(null)
-  const [jobIds, setJobIds] = useState<string[]>([])
+  const [jobs, setJobs] = useState<JobEntry[]>([])
   const [notice, setNotice] = useState<string | null>(null)
 
   useEffect(() => {
@@ -29,7 +29,7 @@ export function App() {
     clearStoredToken()
     setToken('')
     setUpload(null)
-    setJobIds([])
+    setJobs([])
     setNotice(null)
   }
 
@@ -85,12 +85,16 @@ export function App() {
         />
         <PrinterPanel
           upload={upload}
-          onJobSubmitted={(jobId) => setJobIds((previous) => [...previous, jobId])}
+          onJobSubmitted={(jobId) =>
+            setJobs((previous) => [
+              { id: jobId, name: upload?.name ?? '文档' },
+              ...previous,
+            ])}
           onAuthFailure={handleAuthFailure}
           onNotice={setNotice}
         />
         <JobList
-          jobs={jobIds}
+          jobs={jobs}
           onAuthFailure={handleAuthFailure}
           onRestart={handleUploadInvalid}
         />

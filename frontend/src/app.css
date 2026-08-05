@@ -1,9 +1,9 @@
 /* Just Print 业务界面（Gruvbox dark）。 */
 
 .app-shell {
-  max-width: 1160px;
+  max-width: 1200px;
   margin: 0 auto;
-  padding: 28px 22px 64px;
+  padding: 28px 24px 64px;
 }
 
 .app-header {
@@ -11,7 +11,7 @@
   align-items: center;
   justify-content: space-between;
   gap: 16px;
-  margin-bottom: 26px;
+  margin-bottom: 28px;
 }
 
 .header-actions {
@@ -52,14 +52,14 @@
 }
 
 .tagline {
-  color: var(--fg-dim);
+  color: var(--fg-mid);
   font-size: 13px;
 }
 
 .app-main {
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
-  gap: 22px;
+  gap: 26px;
   align-items: start;
 }
 
@@ -71,10 +71,12 @@
   background:
     linear-gradient(180deg, rgb(255 255 255 / 0.025), transparent 42%),
     var(--bg1);
-  border: 1px solid var(--border);
+  border: 1px solid #7c6f64;
   border-radius: var(--radius);
-  box-shadow: var(--shadow);
-  padding: 22px;
+  box-shadow:
+    0 1px 2px rgb(0 0 0 / 0.18),
+    var(--shadow);
+  padding: 24px;
   transition:
     border-color var(--transition),
     box-shadow var(--transition),
@@ -102,8 +104,8 @@
 .card-header {
   display: flex;
   align-items: center;
-  gap: 10px;
-  margin-bottom: 14px;
+  gap: 12px;
+  margin-bottom: 16px;
 }
 
 .card-icon {
@@ -122,6 +124,35 @@
   color: var(--yellow);
 }
 
+.step-badge {
+  align-items: center;
+  border: 1px solid currentColor;
+  border-radius: 999px;
+  display: inline-flex;
+  flex: none;
+  font-family: ui-monospace, 'Cascadia Code', Consolas, monospace;
+  font-size: 11px;
+  font-weight: 700;
+  height: 22px;
+  justify-content: center;
+  width: 22px;
+}
+
+.card-upload .step-badge {
+  background: rgb(250 189 47 / 0.1);
+  color: var(--yellow);
+}
+
+.card-print .step-badge {
+  background: rgb(131 165 152 / 0.1);
+  color: var(--blue);
+}
+
+.card-jobs .step-badge {
+  background: rgb(184 187 38 / 0.1);
+  color: var(--green);
+}
+
 .card-print .card-icon {
   background: rgb(131 165 152 / 0.1);
   border-color: rgb(131 165 152 / 0.22);
@@ -135,7 +166,7 @@
 }
 
 .muted {
-  color: var(--fg-dim);
+  color: var(--fg-mid);
   font-size: 13px;
 }
 
@@ -205,7 +236,7 @@
   background: transparent;
   border: 1px solid var(--bg3);
   border-radius: 10px;
-  color: var(--fg-dim);
+  color: var(--fg-mid);
   display: inline-flex;
   gap: 8px;
   padding: 8px 14px;
@@ -246,7 +277,7 @@
 }
 
 .token-gate::before {
-  background: radial-gradient(circle, rgb(250 189 47 / 0.09), transparent 66%);
+  background: radial-gradient(circle, rgb(250 189 47 / 0.06), transparent 66%);
   height: 540px;
   right: -140px;
   top: -190px;
@@ -254,7 +285,7 @@
 }
 
 .token-gate::after {
-  background: radial-gradient(circle, rgb(131 165 152 / 0.1), transparent 66%);
+  background: radial-gradient(circle, rgb(131 165 152 / 0.07), transparent 66%);
   bottom: -220px;
   height: 520px;
   left: -160px;
@@ -263,14 +294,22 @@
 
 .token-card {
   animation: card-in 0.35s ease both;
+  box-shadow:
+    0 2px 4px rgb(0 0 0 / 0.22),
+    var(--shadow-lg);
   display: flex;
   flex-direction: column;
-  gap: 14px;
+  gap: 16px;
   padding: 32px 30px;
   position: relative;
   text-align: center;
   width: min(420px, 100%);
   z-index: 1;
+}
+
+.token-card .muted {
+  color: var(--fg-mid);
+  font-size: 14px;
 }
 
 .token-card h1 {
@@ -408,7 +447,7 @@
   border: 1px solid var(--bg3);
   border-radius: var(--radius-sm);
   box-shadow: var(--shadow-sm);
-  height: 56vh;
+  height: 50vh;
   min-height: 320px;
   width: 100%;
 }
@@ -427,20 +466,13 @@
 .printer-summary {
   align-items: center;
   display: flex;
-  flex-wrap: wrap;
-  gap: 8px 10px;
+  gap: 8px;
   margin-top: 12px;
 }
 
-.printer-name {
-  font-size: 14px;
-  font-weight: 600;
-}
-
 .printer-detail {
-  color: var(--fg-faint);
-  font-family: ui-monospace, 'Cascadia Code', Consolas, monospace;
-  font-size: 11px;
+  color: var(--fg-mid);
+  font-size: 12px;
 }
 
 .lang-badge {
@@ -473,28 +505,25 @@
 
 .controls {
   display: grid;
-  gap: 12px;
+  gap: 16px;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  margin: 18px 0;
+  margin: 20px 0;
 }
 
 .field {
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 12px;
+  min-width: 0;
 }
 
 .field-label {
-  color: var(--fg-dim);
+  align-items: baseline;
+  color: var(--fg-mid);
+  display: flex;
   font-size: 12px;
   font-weight: 500;
-}
-
-.field-name {
-  color: var(--fg-faint);
-  font-family: ui-monospace, 'Cascadia Code', Consolas, monospace;
-  font-size: 10px;
-  letter-spacing: 0.04em;
+  min-width: 0;
 }
 
 .app-main .primary {
@@ -510,8 +539,8 @@
 
 .jobs {
   display: grid;
-  gap: 10px;
-  grid-template-columns: repeat(auto-fill, minmax(270px, 1fr));
+  gap: 12px;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
   list-style: none;
   margin: 14px 0 0;
   padding: 0;
@@ -580,18 +609,36 @@
   min-width: 0;
 }
 
-.job-id {
+.job-name {
   color: var(--fg);
+  font-size: 13px;
+  font-weight: 600;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.job-id {
+  color: var(--fg-dim);
   font-family: ui-monospace, 'Cascadia Code', Consolas, monospace;
-  font-size: 12px;
+  font-size: 11px;
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
 .job-time {
-  color: var(--fg-faint);
+  color: var(--fg-dim);
   font-size: 11px;
+}
+
+.job-subline {
+  align-items: baseline;
+  display: flex;
+  gap: 8px;
+  min-width: 0;
 }
 
 .badge {
@@ -706,6 +753,42 @@
   }
 }
 
+/* 竖屏平板：主流程改为上下排列，避免左右两栏过挤 */
+@media (max-width: 1080px) and (orientation: portrait) {
+  .app-shell {
+    padding: 20px 18px 64px;
+  }
+
+  .app-main {
+    gap: 18px;
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .jobs-section {
+    grid-column: auto;
+  }
+
+  .controls {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .jobs {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .ghost,
+  .app-main .primary,
+  input,
+  select {
+    min-height: 44px;
+  }
+
+  input,
+  select {
+    font-size: 16px;
+  }
+}
+
 @media (max-width: 820px) {
   .app-shell {
     padding: 16px 14px 64px;
@@ -772,7 +855,7 @@
   }
 
   .preview iframe {
-    height: 46vh;
+    height: 40vh;
     min-height: 260px;
   }
 

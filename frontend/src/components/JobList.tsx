@@ -7,8 +7,13 @@ import {
 } from '../api'
 import { AlertIcon, CheckIcon, ClockIcon, SpinnerIcon } from '../icons'
 
+export interface JobEntry {
+  id: string
+  name: string
+}
+
 interface JobListProps {
-  jobs: string[]
+  jobs: JobEntry[]
   onAuthFailure: () => void
   onRestart: () => void
 }
@@ -47,7 +52,7 @@ export function JobList({ jobs, onAuthFailure, onRestart }: JobListProps) {
     let cancelled = false
 
     async function pollAll(): Promise<void> {
-      for (const id of jobs) {
+      for (const { id } of jobs) {
         if (finishedRef.current.has(id)) {
           continue
         }
@@ -103,13 +108,14 @@ export function JobList({ jobs, onAuthFailure, onRestart }: JobListProps) {
   return (
     <section class="card jobs-section card-jobs">
       <div class="card-header">
+        <span class="step-badge">3</span>
         <span class="card-icon">
           <ClockIcon size={18} />
         </span>
         <h2>任务状态</h2>
       </div>
       <ul class="jobs">
-        {jobs.map((id) => {
+        {jobs.map(({ id, name }) => {
           const view = views[id]
           const status: JobStatus = view?.status ?? 'queued'
           return (
@@ -127,14 +133,17 @@ export function JobList({ jobs, onAuthFailure, onRestart }: JobListProps) {
               </span>
               <div class="job-main">
                 <div class="job-topline">
-                  <span class="job-id">{id.slice(0, 10)}…</span>
+                  <span class="job-name">{name}</span>
                   <span class={`badge badge-${status}`}>{STATUS_LABEL[status]}</span>
                 </div>
-                <span class="job-time">
-                  {view?.createdAtMs
-                    ? `${formatTime(view.createdAtMs)} 提交`
-                    : '等待状态更新…'}
-                </span>
+                <div class="job-subline">
+                  <span class="job-id">{id}</span>
+                  <span class="job-time">
+                    {view?.createdAtMs
+                      ? `${formatTime(view.createdAtMs)} 提交`
+                      : '等待状态更新…'}
+                  </span>
+                </div>
                 {status === 'printing' ? <span class="job-progress" /> : null}
                 {status === 'failed' && view?.error ? (
                   <span class="job-error">

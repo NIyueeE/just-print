@@ -114,6 +114,7 @@ export function Uploader({
   return (
     <section class="card card-upload">
       <div class="card-header">
+        <span class="step-badge">1</span>
         <span class="card-icon">
           <UploadIcon size={18} />
         </span>
