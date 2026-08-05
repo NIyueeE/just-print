@@ -69,6 +69,11 @@ jobs:
 
           # API 冒烟：未带令牌必须 401
           test "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8080/api/printers)" = 401
+          # 空文件上传应返回 400
+          test "$(curl -s -o /dev/null -w '%{http_code}' \
+            -H 'Authorization: Bearer ci-smoke-test' \
+            -F 'file=@/dev/null;filename=empty.txt' \
+            http://127.0.0.1:8080/api/files)" = 400
           # 打印机列表应包含入口脚本配置的 CUPS-PDF
           printers_json="$(curl -s -H 'Authorization: Bearer ci-smoke-test' http://127.0.0.1:8080/api/printers)"
           printf '%s' "$printers_json" | grep -q '"id":"CUPS-PDF"'

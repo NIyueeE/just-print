@@ -52,6 +52,9 @@ pub async fn upload(
         if bytes.len() > state.config.max_upload_bytes {
             return Err(AppError::PayloadTooLarge);
         }
+        if bytes.is_empty() {
+            return Err(AppError::BadRequest("上传文件为空".to_string()));
+        }
         upload = Some((name, bytes));
         break;
     }
