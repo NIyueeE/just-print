@@ -37,6 +37,7 @@ RUN apt-get update \
         libreoffice-writer \
         libreoffice-calc \
         libreoffice-impress \
+        poppler-utils \
     && rm -rf /var/lib/apt/lists/*
 
 # 后端提供 API 与静态前端；入口脚本负责拉起 CUPS 并可选配置调试/发现打印机。

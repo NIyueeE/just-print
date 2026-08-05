@@ -63,9 +63,9 @@ jobs:
           docker exec "$cid" lpstat -p CUPS-PDF | grep -q 'CUPS-PDF'
           docker exec -w /tmp "$cid" sh -c \
             'printf "hello" > sample.txt && soffice --headless --convert-to pdf --outdir /tmp /tmp/sample.txt >/dev/null && test -s /tmp/sample.pdf'
-          # Emoji 应通过 Symbola 渲染并嵌入 PDF（缺失字体时 LibreOffice 不会引用它）
+          # Emoji 应通过 Symbola 渲染并嵌入 PDF（PDF 对象流是压缩的，需用 pdffonts 检查）
           docker exec -w /tmp "$cid" sh -c \
-            'printf "emoji: 😀 🎉 👍 ❤️ ☀️" > /tmp/ci-emoji.txt && soffice --headless --convert-to pdf --outdir /tmp /tmp/ci-emoji.txt >/dev/null && grep -aq symbola /tmp/ci-emoji.pdf'
+            'printf "emoji: 😀 🎉 👍 ❤️ ☀️" > /tmp/ci-emoji.txt && soffice --headless --convert-to pdf --outdir /tmp /tmp/ci-emoji.txt >/dev/null && pdffonts /tmp/ci-emoji.pdf | grep -qi symbola'
 
           # API 冒烟：未带令牌必须 401
           test "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8080/api/printers)" = 401
