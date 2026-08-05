@@ -83,18 +83,23 @@ impl FileStore {
 
     /// 清理无引用且超过 TTL 的文件，返回删除数量。
     pub fn cleanup(&self, ttl: Duration) -> usize {
-        let mut removed = 0;
-        let mut inner = self.lock();
-        let now = Instant::now();
-        inner.retain(|_, record| {
-            if record.references == 0 && now.duration_since(record.created_at) >= ttl {
-                let _ = std::fs::remove_file(&record.path);
-                removed += 1;
-                false
-            } else {
-                true
-            }
-        });
+        let mut paths = Vec::new();
+        {
+            let mut inner = self.lock();
+            let now = Instant::now();
+            inner.retain(|_, record| {
+                if record.references == 0 && now.duration_since(record.created_at) >= ttl {
+                    paths.push(record.path.clone());
+                    false
+                } else {
+                    true
+                }
+            });
+        }
+        let removed = paths.len();
+        for path in paths {
+            let _ = std::fs::remove_file(&path);
+        }
         removed
     }
 

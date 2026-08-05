@@ -142,8 +142,9 @@ impl CupsClient {
                     &request_path.to_string_lossy(),
                 ],
             )
-            .await?;
+            .await;
         let _ = tokio::fs::remove_file(&request_path).await;
+        let output = output?;
         let stdout = String::from_utf8_lossy(&output.stdout);
         Ok(parse_ipp_job(&stdout, &printer_id, &job_number))
     }

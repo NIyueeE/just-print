@@ -282,6 +282,13 @@ async fn render_markdown_to_html(
     Ok(html_path)
 }
 
+/// 尽力删除转换中间文件（`Markdown` 渲染出的 `HTML`）。
+async fn remove_intermediate(intermediate: Option<PathBuf>) {
+    if let Some(path) = intermediate {
+        let _ = tokio::fs::remove_file(&path).await;
+    }
+}
+
 /// 将上传文件转换为 PDF。
 ///
 /// `.pdf` 校验 `%PDF-` 魔数后原样返回；其它格式调用
@@ -343,12 +350,20 @@ pub async fn convert_to_pdf(
         Err(_) => {
             let _ = child.kill().await;
             let _ = tokio::fs::remove_dir_all(&profile_dir).await;
+            remove_intermediate(intermediate).await;
             return Err(ConversionError::Timeout(timeout));
         }
-        Ok(result) => result.map_err(ConversionError::Wait)?,
+        Ok(result) => match result {
+            Ok(status) => status,
+            Err(error) => {
+                remove_intermediate(intermediate).await;
+                return Err(ConversionError::Wait(error));
+            }
+        },
     };
     let _ = tokio::fs::remove_dir_all(&profile_dir).await;
     if !status.success() {
+        remove_intermediate(intermediate).await;
         return Err(ConversionError::NonZeroExit(status.code()));
     }
 
@@ -357,15 +372,15 @@ pub async fn convert_to_pdf(
         .and_then(OsStr::to_str)
         .unwrap_or("document");
     let output = output_dir.join(format!("{stem}.pdf"));
-    let metadata = tokio::fs::metadata(&output)
-        .await
-        .map_err(|_| ConversionError::MissingOutput)?;
+    let Ok(metadata) = tokio::fs::metadata(&output).await else {
+        remove_intermediate(intermediate).await;
+        return Err(ConversionError::MissingOutput);
+    };
     if metadata.len() == 0 {
+        remove_intermediate(intermediate).await;
         return Err(ConversionError::EmptyOutput);
     }
-    if let Some(html_path) = intermediate {
-        let _ = tokio::fs::remove_file(&html_path).await;
-    }
+    remove_intermediate(intermediate).await;
     Ok(output)
 }
 
