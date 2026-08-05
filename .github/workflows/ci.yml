@@ -82,6 +82,21 @@ jobs:
           curl -fsS -H 'Authorization: Bearer ci-smoke-test' \
             "http://127.0.0.1:8080/api/files/$file_id" -o /tmp/ci-preview.pdf
           head -c 5 /tmp/ci-preview.pdf | grep -q '%PDF-'
+          # Markdown 应渲染为 HTML 再转 PDF：内容存在且不含原始 Markdown 标记
+          printf '# Just Print MD Test\n\n**bold text**\n\n```\ncode block line\n```\n' > /tmp/ci-sample.md
+          md_json="$(curl -s -H 'Authorization: Bearer ci-smoke-test' \
+            -F 'file=@/tmp/ci-sample.md;filename=ci-sample.md' \
+            http://127.0.0.1:8080/api/files)"
+          md_id="$(printf '%s' "$md_json" | sed -n 's/.*"id":"\([0-9a-f]\{32\}\)".*/\1/p')"
+          test -n "$md_id"
+          md_text="$(curl -fsS -H 'Authorization: Bearer ci-smoke-test' \
+            "http://127.0.0.1:8080/api/files/$md_id" | docker exec -i "$cid" pdftotext - -)"
+          printf '%s' "$md_text" | grep -q 'Just Print MD Test'
+          printf '%s' "$md_text" | grep -q 'code block line'
+          if printf '%s' "$md_text" | grep -q '^# Just Print'; then
+            echo "raw markdown leaked into PDF"
+            exit 1
+          fi
           # 不存在的打印机提交任务应返回 404
           test "$(curl -s -o /dev/null -w '%{http_code}' \
             -H 'Authorization: Bearer ci-smoke-test' -H 'Content-Type: application/json' \
