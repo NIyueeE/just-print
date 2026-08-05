@@ -32,6 +32,7 @@ RUN apt-get update \
         dbus \
         fonts-liberation \
         fonts-noto-cjk \
+        fonts-symbola \
         ghostscript \
         libreoffice-writer \
         libreoffice-calc \
