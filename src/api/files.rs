@@ -9,6 +9,7 @@ use axum::extract::{Multipart, Path as AxumPath, State};
 use axum::http::{StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use serde::Serialize;
+use tokio_util::io::ReaderStream;
 
 use crate::conversion::{self, ConversionError};
 use crate::error::AppError;
@@ -105,18 +106,23 @@ pub async fn preview(
     AxumPath(file_id): AxumPath<String>,
 ) -> Result<Response, AppError> {
     let guard = state.files.guard(&file_id).ok_or(AppError::FileNotFound)?;
-    let bytes = tokio::fs::read(guard.path())
+    let metadata = tokio::fs::metadata(guard.path())
+        .await
+        .map_err(|error| AppError::Internal(format!("读取预览文件失败: {error}")))?;
+    let file = tokio::fs::File::open(guard.path())
         .await
         .map_err(|error| AppError::Internal(format!("读取预览文件失败: {error}")))?;
     drop(guard);
+    let content_length = metadata.len().to_string();
     let headers = [
         (header::CONTENT_TYPE, "application/pdf"),
         (
             header::CONTENT_DISPOSITION,
             "inline; filename=\"preview.pdf\"",
         ),
+        (header::CONTENT_LENGTH, content_length.as_str()),
     ];
-    Ok((headers, Body::from(bytes)).into_response())
+    Ok((headers, Body::from_stream(ReaderStream::new(file))).into_response())
 }
 
 fn map_conversion_error(error: ConversionError) -> AppError {
