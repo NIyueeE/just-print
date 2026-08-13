@@ -282,10 +282,15 @@ async fn render_markdown_to_html(
     Ok(html_path)
 }
 
-/// 尽力删除转换中间文件（`Markdown` 渲染出的 `HTML`）。
-async fn remove_intermediate(intermediate: Option<PathBuf>) {
+/// 尽力删除转换失败时的残留产物：`UserInstallation` 配置目录、
+/// 中间文件（`Markdown` 渲染出的 `HTML`）与可能的部分输出 `PDF`。
+async fn cleanup_artifacts(profile_dir: &Path, intermediate: Option<&Path>, output: Option<&Path>) {
+    let _ = tokio::fs::remove_dir_all(profile_dir).await;
     if let Some(path) = intermediate {
-        let _ = tokio::fs::remove_file(&path).await;
+        let _ = tokio::fs::remove_file(path).await;
+    }
+    if let Some(path) = output {
+        let _ = tokio::fs::remove_file(path).await;
     }
 }
 
@@ -346,41 +351,40 @@ pub async fn convert_to_pdf(
         .spawn()
         .map_err(ConversionError::Spawn)?;
 
-    let status = match tokio::time::timeout(timeout, child.wait()).await {
-        Err(_) => {
-            let _ = child.kill().await;
-            let _ = tokio::fs::remove_dir_all(&profile_dir).await;
-            remove_intermediate(intermediate).await;
-            return Err(ConversionError::Timeout(timeout));
-        }
-        Ok(result) => match result {
-            Ok(status) => status,
-            Err(error) => {
-                remove_intermediate(intermediate).await;
-                return Err(ConversionError::Wait(error));
-            }
-        },
-    };
-    let _ = tokio::fs::remove_dir_all(&profile_dir).await;
-    if !status.success() {
-        remove_intermediate(intermediate).await;
-        return Err(ConversionError::NonZeroExit(status.code()));
-    }
-
     let stem = convert_source
         .file_stem()
         .and_then(OsStr::to_str)
         .unwrap_or("document");
     let output = output_dir.join(format!("{stem}.pdf"));
+
+    let status = match tokio::time::timeout(timeout, child.wait()).await {
+        Err(_) => {
+            let _ = child.kill().await;
+            cleanup_artifacts(&profile_dir, intermediate.as_deref(), Some(&output)).await;
+            return Err(ConversionError::Timeout(timeout));
+        }
+        Ok(result) => match result {
+            Ok(status) => status,
+            Err(error) => {
+                cleanup_artifacts(&profile_dir, intermediate.as_deref(), Some(&output)).await;
+                return Err(ConversionError::Wait(error));
+            }
+        },
+    };
+    if !status.success() {
+        cleanup_artifacts(&profile_dir, intermediate.as_deref(), Some(&output)).await;
+        return Err(ConversionError::NonZeroExit(status.code()));
+    }
+
     let Ok(metadata) = tokio::fs::metadata(&output).await else {
-        remove_intermediate(intermediate).await;
+        cleanup_artifacts(&profile_dir, intermediate.as_deref(), Some(&output)).await;
         return Err(ConversionError::MissingOutput);
     };
     if metadata.len() == 0 {
-        remove_intermediate(intermediate).await;
+        cleanup_artifacts(&profile_dir, intermediate.as_deref(), Some(&output)).await;
         return Err(ConversionError::EmptyOutput);
     }
-    remove_intermediate(intermediate).await;
+    cleanup_artifacts(&profile_dir, intermediate.as_deref(), None).await;
     Ok(output)
 }
 
