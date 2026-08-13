@@ -5,6 +5,7 @@ use std::sync::Arc;
 
 use axum::Json;
 use axum::extract::State;
+use axum::extract::rejection::JsonRejection;
 use axum::http::StatusCode;
 use serde::{Deserialize, Serialize};
 
@@ -34,8 +35,10 @@ pub struct PrintResponse {
 /// 校验选项并直接提交给 CUPS，返回 CUPS 任务 id。
 pub async fn submit(
     State(state): State<Arc<AppState>>,
-    Json(request): Json<PrintRequest>,
+    body: Result<Json<PrintRequest>, JsonRejection>,
 ) -> Result<(StatusCode, Json<PrintResponse>), AppError> {
+    let Json(request) = body
+        .map_err(|error| AppError::BadRequest(format!("JSON 解析失败: {}", error.body_text())))?;
     let printers = state.cups.list_printers().await.map_err(AppError::from)?;
     if !printers
         .iter()

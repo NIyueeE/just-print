@@ -21,6 +21,9 @@ pub enum AppError {
     /// 任务不存在或已被 CUPS 清理。
     #[error("任务不存在或已失效（可能已被 CUPS 清理）")]
     JobNotFound,
+    /// 请求的 API 接口不存在。
+    #[error("接口不存在")]
+    NotFound,
     /// 打印机不存在。
     #[error("打印机不存在或已移除")]
     PrinterNotFound,
@@ -56,7 +59,9 @@ impl AppError {
         match self {
             Self::Unauthorized => StatusCode::UNAUTHORIZED,
             Self::BadRequest(_) | Self::InvalidControls(_) => StatusCode::BAD_REQUEST,
-            Self::FileNotFound | Self::JobNotFound | Self::PrinterNotFound => StatusCode::NOT_FOUND,
+            Self::FileNotFound | Self::JobNotFound | Self::PrinterNotFound | Self::NotFound => {
+                StatusCode::NOT_FOUND
+            }
             Self::PrinterUnavailable(_) => StatusCode::CONFLICT,
             Self::UnsupportedMediaType(_) => StatusCode::UNSUPPORTED_MEDIA_TYPE,
             Self::PayloadTooLarge => StatusCode::PAYLOAD_TOO_LARGE,
@@ -70,7 +75,9 @@ impl AppError {
         match self {
             Self::Unauthorized => "unauthorized",
             Self::BadRequest(_) => "bad_request",
-            Self::FileNotFound | Self::JobNotFound | Self::PrinterNotFound => "not_found",
+            Self::FileNotFound | Self::JobNotFound | Self::PrinterNotFound | Self::NotFound => {
+                "not_found"
+            }
             Self::PrinterUnavailable(_) => "printer_unavailable",
             Self::InvalidControls(_) => "invalid_controls",
             Self::UnsupportedMediaType(_) => "unsupported_media_type",

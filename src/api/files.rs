@@ -5,6 +5,7 @@ use std::sync::Arc;
 
 use axum::Json;
 use axum::body::{Body, Bytes};
+use axum::extract::multipart::MultipartRejection;
 use axum::extract::{Multipart, Path as AxumPath, State};
 use axum::http::{StatusCode, header};
 use axum::response::{IntoResponse, Response};
@@ -30,13 +31,16 @@ pub struct UploadResponse {
 /// 上传文件并转换为 PDF。
 pub async fn upload(
     State(state): State<Arc<AppState>>,
-    mut multipart: Multipart,
+    multipart: Result<Multipart, MultipartRejection>,
 ) -> Result<(StatusCode, Json<UploadResponse>), AppError> {
+    let mut multipart = multipart.map_err(|error| {
+        AppError::BadRequest(format!("multipart 请求不合法: {}", error.body_text()))
+    })?;
     let mut upload: Option<(String, Bytes)> = None;
     while let Some(field) = multipart
         .next_field()
         .await
-        .map_err(|error| AppError::BadRequest(format!("multipart 解析失败: {error}")))?
+        .map_err(|error| map_multipart_error(&error))?
     {
         if field.name() != Some("file") {
             continue;
@@ -48,7 +52,7 @@ pub async fn upload(
         let bytes = field
             .bytes()
             .await
-            .map_err(|error| AppError::BadRequest(format!("读取上传内容失败: {error}")))?;
+            .map_err(|error| map_multipart_error(&error))?;
         if bytes.len() > state.config.max_upload_bytes {
             return Err(AppError::PayloadTooLarge);
         }
@@ -126,6 +130,14 @@ pub async fn preview(
         (header::CONTENT_LENGTH, content_length.as_str()),
     ];
     Ok((headers, Body::from_stream(ReaderStream::new(file))).into_response())
+}
+
+fn map_multipart_error(error: &axum::extract::multipart::MultipartError) -> AppError {
+    if error.status() == StatusCode::PAYLOAD_TOO_LARGE {
+        AppError::PayloadTooLarge
+    } else {
+        AppError::BadRequest(format!("multipart 解析失败: {error}"))
+    }
 }
 
 fn map_conversion_error(error: ConversionError) -> AppError {
