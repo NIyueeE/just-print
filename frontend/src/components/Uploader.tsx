@@ -7,8 +7,11 @@ import {
   isUnauthorized,
   uploadFile,
 } from '../api'
+import type { Notice } from '../app'
 import {
   AlertIcon,
+  ChevronDownIcon,
+  ChevronUpIcon,
   EyeIcon,
   FileTextIcon,
   SpinnerIcon,
@@ -19,11 +22,42 @@ interface UploaderProps {
   onUploaded: (upload: UploadResult) => void
   onAuthFailure: () => void
   onUploadInvalid: () => void
-  onNotice: (message: string | null) => void
+  onNotice: (notice: Notice | null) => void
 }
 
 const ACCEPT =
   '.123,.602,.abw,.bmp,.cdr,.cgm,.cmx,.csv,.cwk,.dbf,.dif,.doc,.docm,.docx,.dot,.dotm,.dotx,.dps,.dpt,.dxf,.emf,.emz,.eps,.et,.ett,.fb2,.fh,.fh1,.fh10,.fh11,.fh2,.fh3,.fh4,.fh5,.fh6,.fh7,.fh8,.fh9,.fodg,.fodp,.fods,.fodt,.gif,.gnm,.gnumeric,.htm,.html,.hwp,.jfif,.jif,.jpe,.jpeg,.jpg,.key,.lrf,.lwp,.mcw,.md,.met,.mov,.mp,.mw,.mwd,.numbers,.nx^d,.odc,.odg,.odm,.odp,.ods,.odt,.otg,.oth,.otm,.otp,.ots,.ott,.p65,.pages,.pbm,.pcd,.pct,.pcx,.pdb,.pdf,.pgm,.pict,.pm,.pm6,.pmd,.png,.pot,.potm,.potx,.ppm,.pps,.ppsx,.ppt,.pptm,.pptx,.psd,.psw,.pub,.qxd,.qxt,.ras,.rtf,.sda,.sdc,.sdd,.sdw,.slk,.stc,.std,.sti,.stw,.svg,.svgz,.svm,.sxc,.sxd,.sxg,.sxi,.sxs,.sxw,.sylk,.tab,.tga,.tif,.tiff,.tsv,.txt,.vdx,.vsd,.vsdm,.vsdx,.wb1,.wb2,.wdb,.webp,.wk1,.wk3,.wk4,.wks,.wmf,.wmz,.wn,.wpd,.wpg,.wps,.wpt,.wq1,.wq2,.wri,.xbm,.xhtml,.xlc,.xlk,.xlm,.xls,.xlsb,.xlsm,.xlsx,.xlt,.xltm,.xltx,.xlw,.xml,.xpm,.zabw,.zip,.zmf'
+
+type FileCategory = 'pdf' | 'office' | 'image' | 'text' | 'other'
+
+const OFFICE_EXTS = new Set([
+  'doc', 'docm', 'docx', 'dot', 'dotm', 'dotx', 'xls', 'xlsb', 'xlsm', 'xlsx',
+  'xlt', 'xltm', 'xltx', 'xlw', 'ppt', 'pptm', 'pptx', 'pot', 'potm', 'potx',
+  'pps', 'ppsx', 'odt', 'ods', 'odp', 'odg', 'rtf', 'csv', 'tsv', 'pages',
+  'numbers', 'key', 'pub', 'wps', 'wpd', 'et', 'ett', 'dps', 'dpt', 'mdb',
+])
+const IMAGE_EXTS = new Set([
+  'png', 'jpg', 'jpeg', 'jpe', 'jfif', 'gif', 'webp', 'bmp', 'tif', 'tiff',
+  'svg', 'svgz', 'psd', 'eps', 'emf', 'wmf', 'xbm', 'pbm', 'pgm', 'ppm',
+])
+const TEXT_EXTS = new Set(['txt', 'md', 'htm', 'html', 'xhtml', 'xml', 'log'])
+
+function fileCategory(name: string): FileCategory {
+  const ext = name.split('.').pop()?.toLowerCase() ?? ''
+  if (ext === 'pdf') return 'pdf'
+  if (OFFICE_EXTS.has(ext)) return 'office'
+  if (IMAGE_EXTS.has(ext)) return 'image'
+  if (TEXT_EXTS.has(ext)) return 'text'
+  return 'other'
+}
+
+const CATEGORY_LABEL: Record<FileCategory, string> = {
+  pdf: 'PDF',
+  office: 'Office 文档',
+  image: '图片',
+  text: '文本',
+  other: '文件',
+}
 
 export function Uploader({
   onUploaded,
@@ -35,6 +69,7 @@ export function Uploader({
   const [busy, setBusy] = useState(false)
   const [upload, setUpload] = useState<UploadResult | null>(null)
   const [previewUrl, setPreviewUrl] = useState<string | null>(null)
+  const [previewOpen, setPreviewOpen] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [dragging, setDragging] = useState(false)
   const previewUrlRef = useRef<string | null>(null)
@@ -70,7 +105,7 @@ export function Uploader({
       if (requestError instanceof ApiError && requestError.status === 404) {
         setError('文件已失效（服务可能已重启），请重新上传')
         onUploadInvalid()
-        onNotice('服务已重启，请重新上传')
+        onNotice({ message: '服务已重启，请重新上传', kind: 'error' })
         return
       }
       setError(`预览加载失败：${errorMessage(requestError)}`)
@@ -88,6 +123,7 @@ export function Uploader({
     try {
       const result = await uploadFile(file)
       setUpload(result)
+      setPreviewOpen(true)
       onUploaded(result)
       void loadPreview(result.id)
     } catch (requestError) {
@@ -110,6 +146,8 @@ export function Uploader({
     }
     return `${(bytes / (1024 * 1024)).toFixed(1)} MiB`
   }
+
+  const category = file ? fileCategory(file.name) : null
 
   return (
     <section class="card card-upload">
@@ -136,6 +174,7 @@ export function Uploader({
             clearPreview()
             setFile(dropped)
             setUpload(null)
+            setError(null)
           }
         }}
       >
@@ -157,7 +196,14 @@ export function Uploader({
         <label for="file-input" class="file-label">
           {file ? (
             <>
-              <strong>{file.name}</strong>
+              <span class="file-name-row">
+                {category ? (
+                  <span class={`file-chip file-chip-${category}`}>
+                    {CATEGORY_LABEL[category]}
+                  </span>
+                ) : null}
+                <strong>{file.name}</strong>
+              </span>
               <span class="muted">{formatSize(file.size)} · 点击或拖拽可更换</span>
             </>
           ) : (
@@ -198,8 +244,17 @@ export function Uploader({
             <EyeIcon size={16} />
             <h3>预览：{upload.name}</h3>
             <span class="muted">（{formatSize(upload.size)}）</span>
+            <button
+              type="button"
+              class="ghost ghost-sm preview-toggle"
+              onClick={() => setPreviewOpen((open) => !open)}
+              aria-expanded={previewOpen}
+            >
+              {previewOpen ? <ChevronUpIcon size={14} /> : <ChevronDownIcon size={14} />}
+              {previewOpen ? '收起' : '展开'}
+            </button>
           </div>
-          <iframe title="PDF 预览" src={previewUrl} />
+          {previewOpen ? <iframe title="PDF 预览" src={previewUrl} /> : null}
         </div>
       ) : null}
       {upload && !previewUrl ? (

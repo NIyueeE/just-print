@@ -9,6 +9,7 @@ import {
   listPrinters,
   submitPrint,
 } from '../api'
+import type { Notice } from '../app'
 import {
   AlertIcon,
   InfoIcon,
@@ -20,9 +21,9 @@ import {
 
 interface PrinterPanelProps {
   upload: UploadResult | null
-  onJobSubmitted: (jobId: string) => void
+  onJobSubmitted: (jobId: string, printerName: string) => void
   onAuthFailure: () => void
-  onNotice: (message: string | null) => void
+  onNotice: (notice: Notice | null) => void
 }
 
 /** 常用打印偏好：A4 纸张、最大分辨率、双面长边装订。 */
@@ -140,14 +141,20 @@ export function PrinterPanel({
   const [selectedId, setSelectedId] = useState('')
   const [controls, setControls] = useState<Record<string, string>>({})
   const [busy, setBusy] = useState(false)
+  const [refreshing, setRefreshing] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const mountedRef = useRef(true)
+  const refreshingRef = useRef(false)
   const selectedIdRef = useRef('')
 
   useEffect(() => {
     mountedRef.current = true
     void refresh()
-    const interval = window.setInterval(() => void refresh(), 5000)
+    const interval = window.setInterval(() => {
+      if (!document.hidden) {
+        void refresh()
+      }
+    }, 5000)
     return () => {
       mountedRef.current = false
       window.clearInterval(interval)
@@ -155,12 +162,18 @@ export function PrinterPanel({
   }, [])
 
   async function refresh(): Promise<void> {
+    if (refreshingRef.current) {
+      return
+    }
+    refreshingRef.current = true
+    setRefreshing(true)
     try {
       const result = await listPrinters()
       if (!mountedRef.current) {
         return
       }
       setPrinters(result.printers)
+      setError(null)
       const previous = selectedIdRef.current
       const keep = previous && result.printers.some((printer) => printer.id === previous)
       const next = keep ? previous : (result.printers[0]?.id ?? '')
@@ -177,6 +190,11 @@ export function PrinterPanel({
       }
       if (mountedRef.current) {
         setError(`打印机列表加载失败：${errorMessage(requestError)}`)
+      }
+    } finally {
+      refreshingRef.current = false
+      if (mountedRef.current) {
+        setRefreshing(false)
       }
     }
   }
@@ -200,6 +218,7 @@ export function PrinterPanel({
       }
       return (
         <select
+          aria-label={CONTROL_LABELS[key] ?? key}
           value={controls[key] ?? ''}
           onInput={(event) =>
             setControl(key, (event.target as HTMLSelectElement).value)}
@@ -220,6 +239,7 @@ export function PrinterPanel({
         inputMode="numeric"
         min={min}
         max={max}
+        aria-label={CONTROL_LABELS[key] ?? key}
         value={controls[key] ?? ''}
         onInput={(event) =>
           setControl(key, (event.target as HTMLInputElement).value)}
@@ -243,8 +263,8 @@ export function PrinterPanel({
         printer_id: selected.id,
         options: controls,
       })
-      onJobSubmitted(result.job_id)
-      onNotice('打印任务已提交给 CUPS')
+      onJobSubmitted(result.job_id, selected.name)
+      onNotice({ message: '打印任务已提交给 CUPS', kind: 'success' })
     } catch (requestError) {
       if (isUnauthorized(requestError)) {
         onAuthFailure()
@@ -264,8 +284,27 @@ export function PrinterPanel({
           <PrinterIcon size={18} />
         </span>
         <h2>打印</h2>
+        <button
+          type="button"
+          class="ghost ghost-sm"
+          onClick={() => void refresh()}
+          disabled={refreshing}
+          title="刷新打印机列表"
+        >
+          <RefreshIcon size={14} className={refreshing ? 'refresh-spin' : undefined} />
+          刷新
+        </button>
       </div>
-      {printers.length === 0 ? (
+      {error ? (
+        <div class="error-box" role="alert">
+          <AlertIcon size={16} />
+          <span>
+            {error}，请确认容器内 CUPS 服务已启动（可用{' '}
+            <code>JUST_PRINT_CUPS_PDF=1</code> 添加 CUPS-PDF 调试打印机），
+            服务每 5 秒自动重试。
+          </span>
+        </div>
+      ) : printers.length === 0 ? (
         <div class="hint">
           <RefreshIcon size={15} className="refresh-spin" />
           <span>未发现打印机。请先在 CUPS 中配置打印机（容器内可用 JUST_PRINT_CUPS_PDF=1 添加 CUPS-PDF 调试打印机），服务会每 5 秒自动重试。</span>
@@ -348,12 +387,6 @@ export function PrinterPanel({
           </button>
         </>
       )}
-      {error ? (
-        <p class="error">
-          <AlertIcon size={15} />
-          {error}
-        </p>
-      ) : null}
     </section>
   )
 }

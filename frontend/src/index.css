@@ -56,6 +56,7 @@ body {
   background-attachment: fixed;
   color: var(--fg);
   -webkit-font-smoothing: antialiased;
+  -webkit-tap-highlight-color: transparent;
   text-rendering: optimizeLegibility;
 }
 
@@ -77,6 +78,10 @@ input,
 select {
   font: inherit;
   color: inherit;
+}
+
+select {
+  cursor: pointer;
 }
 
 button {

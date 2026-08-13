@@ -8,14 +8,30 @@ import { TokenGate } from './components/TokenGate'
 import { Uploader } from './components/Uploader'
 import { PrinterPanel } from './components/PrinterPanel'
 import { JobList, type JobEntry } from './components/JobList'
-import { CheckIcon, GitHubIcon, LogoMark, LogoutIcon } from './icons'
+import { FlowSteps, type StepState } from './components/FlowSteps'
+import {
+  AlertIcon,
+  CheckIcon,
+  GitHubIcon,
+  InfoIcon,
+  LogoMark,
+  LogoutIcon,
+} from './icons'
 import './app.css'
+
+export type NoticeKind = 'success' | 'error' | 'info'
+
+export interface Notice {
+  message: string
+  kind: NoticeKind
+}
 
 export function App() {
   const [token, setToken] = useState<string>(() => getStoredToken())
   const [upload, setUpload] = useState<UploadResult | null>(null)
   const [jobs, setJobs] = useState<JobEntry[]>([])
-  const [notice, setNotice] = useState<string | null>(null)
+  const [finishedIds, setFinishedIds] = useState<Set<string>>(new Set())
+  const [notice, setNotice] = useState<Notice | null>(null)
 
   useEffect(() => {
     if (!notice) {
@@ -30,22 +46,45 @@ export function App() {
     setToken('')
     setUpload(null)
     setJobs([])
+    setFinishedIds(new Set())
     setNotice(null)
   }
 
   function handleUploaded(result: UploadResult): void {
     setUpload(result)
-    setNotice(`文件「${result.name}」已转换完成`)
+    setNotice({ message: `文件「${result.name}」已转换完成`, kind: 'success' })
   }
 
   function handleUploadInvalid(): void {
     setUpload(null)
-    setNotice('服务已重启，请重新上传')
+    setNotice({ message: '服务已重启，请重新上传', kind: 'error' })
+  }
+
+  function handleFinished(ids: string[]): void {
+    setFinishedIds((previous) => {
+      const next = new Set(previous)
+      for (const id of ids) {
+        next.add(id)
+      }
+      return next
+    })
+  }
+
+  function handleClearFinished(): void {
+    setJobs((previous) => previous.filter((job) => !finishedIds.has(job.id)))
+    setFinishedIds(new Set())
   }
 
   if (!token) {
     return <TokenGate onValid={(value) => setToken(value)} />
   }
+
+  const allFinished = jobs.length > 0 && jobs.every((job) => finishedIds.has(job.id))
+  const stepStates: StepState[] = [
+    upload ? 'done' : 'active',
+    jobs.length > 0 ? 'done' : upload ? 'active' : 'todo',
+    jobs.length > 0 ? (allFinished ? 'done' : 'active') : 'todo',
+  ]
 
   return (
     <div class="app-shell">
@@ -76,6 +115,13 @@ export function App() {
           </button>
         </div>
       </header>
+      <FlowSteps
+        steps={[
+          { label: '上传文档', state: stepStates[0] },
+          { label: '打印设置', state: stepStates[1] },
+          { label: '任务状态', state: stepStates[2] },
+        ]}
+      />
       <main class="app-main">
         <Uploader
           onUploaded={handleUploaded}
@@ -85,9 +131,9 @@ export function App() {
         />
         <PrinterPanel
           upload={upload}
-          onJobSubmitted={(jobId) =>
+          onJobSubmitted={(jobId, printerName) =>
             setJobs((previous) => [
-              { id: jobId, name: upload?.name ?? '文档' },
+              { id: jobId, name: upload?.name ?? '文档', printer: printerName },
               ...previous,
             ])}
           onAuthFailure={handleAuthFailure}
@@ -97,12 +143,20 @@ export function App() {
           jobs={jobs}
           onAuthFailure={handleAuthFailure}
           onRestart={handleUploadInvalid}
+          onFinished={handleFinished}
+          onClearFinished={handleClearFinished}
         />
       </main>
       {notice ? (
-        <div class="notice" role="status">
-          <CheckIcon size={16} />
-          {notice}
+        <div class={`notice notice-${notice.kind}`} role="status">
+          {notice.kind === 'success' ? (
+            <CheckIcon size={16} />
+          ) : notice.kind === 'error' ? (
+            <AlertIcon size={16} />
+          ) : (
+            <InfoIcon size={16} />
+          )}
+          {notice.message}
         </div>
       ) : null}
     </div>
