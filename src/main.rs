@@ -15,6 +15,7 @@ mod store;
 use std::process::ExitCode;
 use std::sync::Arc;
 
+use tokio::signal;
 use tracing::info;
 use tracing_subscriber::EnvFilter;
 
@@ -60,8 +61,31 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         cups_server = %config.cups_server,
         "just-print 已启动"
     );
-    axum::serve(listener, app).await?;
+    axum::serve(listener, app)
+        .with_graceful_shutdown(shutdown_signal())
+        .await?;
     Ok(())
+}
+
+/// 等待 SIGINT / SIGTERM（容器停止信号），随后优雅退出。
+async fn shutdown_signal() {
+    let ctrl_c = async {
+        let _ = signal::ctrl_c().await;
+    };
+    #[cfg(unix)]
+    let terminate = async {
+        let result = signal::unix::signal(signal::unix::SignalKind::terminate());
+        let Ok(mut terminate) = result else {
+            return;
+        };
+        let _ = terminate.recv().await;
+    };
+    #[cfg(not(unix))]
+    let terminate = std::future::pending::<()>();
+    tokio::select! {
+        () = ctrl_c => {}
+        () = terminate => {}
+    }
 }
 
 fn init_tracing() {

@@ -12,6 +12,7 @@ use std::time::Duration;
 use serde::Serialize;
 use thiserror::Error;
 use tokio::process::Command;
+use tracing::debug;
 
 /// 默认 CUPS 服务地址。
 pub const DEFAULT_CUPS_URI: &str = "http://127.0.0.1:631";
@@ -183,10 +184,17 @@ impl CupsClient {
             .env("LANG", "C")
             .env("TZ", "UTC")
             .kill_on_drop(true);
+        let started = std::time::Instant::now();
+        debug!(program, args = %args.join(" "), "执行 CUPS 命令");
         let output = tokio::time::timeout(self.timeout, command.output())
             .await
             .map_err(|_| CupsError::Timeout(program))?
             .map_err(|error| CupsError::Spawn(error.to_string()))?;
+        debug!(
+            program,
+            elapsed_ms = started.elapsed().as_millis(),
+            "CUPS 命令完成"
+        );
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
             return Err(CupsError::Command { program, stderr });
