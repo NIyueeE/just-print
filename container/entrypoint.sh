@@ -150,6 +150,7 @@ auto_add_usb_printers() {
     fi
 
     set -- -p "$name" -E -v "$uri" -m "$ppd"
+    base_args=$#
     for opt in $extra_options; do
       case "$opt" in
         *=*) set -- "$@" -o "$opt" ;;
@@ -158,6 +159,16 @@ auto_add_usb_printers() {
     done
     if lpadmin "$@" >/dev/null 2>&1; then
       echo "auto-added USB printer: $name ($uri, $ppd)"
+    elif [ "$#" -gt "$base_args" ]; then
+      # 选项名/值不被该 PPD 接受时，退回不带选项重试，避免因一个拼写错误
+      # 导致整台打印机都建不出来。
+      echo "warning: lpadmin 拒绝 JUST_PRINT_USB_OPTIONS，改为不带选项添加 $name" >&2
+      set -- -p "$name" -E -v "$uri" -m "$ppd"
+      if lpadmin "$@" >/dev/null 2>&1; then
+        echo "auto-added USB printer (without options): $name ($uri, $ppd)"
+      else
+        echo "warning: failed to auto-add USB printer $name ($uri, $ppd)" >&2
+      fi
     else
       echo "warning: failed to auto-add USB printer $name ($uri, $ppd)" >&2
     fi
