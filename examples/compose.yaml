@@ -3,6 +3,9 @@
 #
 # 镜像直接从 GitHub Container Registry 拉取。
 # 完整部署说明见 docs/deployment.md。
+#
+# 只有 JUST_PRINT_TOKEN 是必填项，其余变量都有默认值；这里只保留必填项，
+# 可选项以注释列出，按需取消注释即可。
 services:
   just-print:
     image: ghcr.io/niyueee/just-print:latest
@@ -11,22 +14,15 @@ services:
     ports:
       - "${JUST_PRINT_HTTP_PORT:-8080}:8080"
     environment:
-      JUST_PRINT_ADDR: "0.0.0.0:8080"
-      JUST_PRINT_WEB_DIR: "/usr/share/just-print/web"
-      # 容器内 CUPS 服务地址；一般无需修改。
-      JUST_PRINT_CUPS_URI: "http://127.0.0.1:631"
-      # 必须显式提供令牌；未设置时为空值，后端按 fail-closed 拒绝启动，避免弱口令。
+      # 必填：准入令牌；未设置时为空值，后端 fail-closed 拒绝启动。
       JUST_PRINT_TOKEN: "${JUST_PRINT_TOKEN}"
-      # 无真实打印机调试：设为 "1" 时入口脚本自动添加 CUPS-PDF 调试打印机。
-      JUST_PRINT_CUPS_PDF: "${JUST_PRINT_CUPS_PDF:-0}"
-      # 设为 "1" 时启用 mDNS / Avahi 并自动发现 IPP Everywhere 打印机。
-      JUST_PRINT_DISCOVER_IPP: "${JUST_PRINT_DISCOVER_IPP:-0}"
-      # 自动发现并添加 USB 打印机队列（默认开启；不需要可设为 "0"）。
-      JUST_PRINT_AUTO_USB: "${JUST_PRINT_AUTO_USB:-1}"
-      # 可选：固定自动添加 USB 打印机使用的 PPD；留空按型号匹配，找不到用通用 PCL。
-      JUST_PRINT_USB_PPD: "${JUST_PRINT_USB_PPD:-}"
-      # 可选：USB 队列的 PPD 选项（逗号分隔 key=value），如声明双面器 Option1=True。
-      JUST_PRINT_USB_OPTIONS: "${JUST_PRINT_USB_OPTIONS:-}"
+      # 以下均有默认值，按需取消注释：
+      # JUST_PRINT_AUTO_USB: "0"            # 关闭 USB 打印机自动建队列
+      # JUST_PRINT_DISCOVER_IPP: "1"        # mDNS/Avahi + ippfind 自动发现
+      # JUST_PRINT_CUPS_PDF: "1"            # 添加 CUPS-PDF 调试打印机
+      # JUST_PRINT_USB_PPD: "lsb/usr/cupsfilters/pxlmono.ppd"
+      # JUST_PRINT_USB_OPTIONS: "OptionDuplex=True"
+      # 完整列表（上传/转换限额、缓存与超时）见 docs/deployment.md。
     # 转换产生的临时文件放在内存文件系统，容器重启即清空。
     tmpfs: /tmp
     # LibreOffice 对 /dev/shm 有依赖，默认 64MiB 在转换大文档时可能不足。

@@ -5,11 +5,12 @@
 #   sudo mkdir -p /etc/containers/systemd /etc/just-print
 #   sudo cp examples/just-print.env.example /etc/just-print/just-print.env
 #   sudo chmod 600 /etc/just-print/just-print.env
+#   sudo vi /etc/just-print/just-print.env     # 必须设置 JUST_PRINT_TOKEN
 #   sudo cp examples/just-print.container /etc/containers/systemd/
 #   sudo systemctl daemon-reload
 #   sudo systemctl enable --now just-print.service
 #
-# 镜像直接从 GitHub Container Registry 拉取。
+# 只有 JUST_PRINT_TOKEN 是必填项，其余变量都有默认值；下面只列出需要按需覆盖的项。
 
 [Unit]
 Description=Just Print service
@@ -18,25 +19,32 @@ Wants=network-online.target
 
 [Container]
 Image=ghcr.io/niyueee/just-print:latest
+# 生产环境建议固定版本，避免 :latest 静默跨越破坏性变更：
+# Image=ghcr.io/niyueee/just-print:v0.3.4
 ContainerName=just-print
 PublishPort=8080:8080
-Environment=JUST_PRINT_ADDR=0.0.0.0:8080
-Environment=JUST_PRINT_WEB_DIR=/usr/share/just-print/web
-Environment=JUST_PRINT_CUPS_URI=http://127.0.0.1:631
-# 自动发现并添加 USB 打印机队列（默认开启；设为 0 关闭）。
-Environment=JUST_PRINT_AUTO_USB=1
-# 可选：固定自动添加 USB 打印机使用的 PPD；留空按型号匹配，找不到用通用 PCL。
-# Environment=JUST_PRINT_USB_PPD=drv:///sample.drv/generpcl.ppd
-# 可选：USB 队列的 PPD 选项（逗号分隔 key=value），如声明双面器已安装。
-# Environment=JUST_PRINT_USB_OPTIONS=Option1=True
+
+# 令牌放在 600 权限的 EnvironmentFile 中（内容形如 JUST_PRINT_TOKEN=<openssl rand -hex 32>）。
+# 不要直接写 Environment=JUST_PRINT_TOKEN=...：会被 systemctl show / podman inspect 看到，
+# 且 systemd 会对 Environment= 做 % 说明符展开（%% 会变成 %），可能让令牌与预期不一致。
 EnvironmentFile=/etc/just-print/just-print.env
+
+# 其余环境变量都有默认值，按需取消注释（默认值见 docs/deployment.md）：
+# Environment=JUST_PRINT_AUTO_USB=0
+# Environment=JUST_PRINT_DISCOVER_IPP=1
+# Environment=JUST_PRINT_CUPS_PDF=1
+# 指定厂商/通用 PPD 与硬件选项（例如联想 LJ4000D：PCL6 + 双面单元）：
+# Environment=JUST_PRINT_USB_PPD=lsb/usr/cupsfilters/pxlmono.ppd
+# Environment=JUST_PRINT_USB_OPTIONS=OptionDuplex=True
+
 Tmpfs=/tmp
 # LibreOffice 对 /dev/shm 有依赖，默认 64MiB 在转换大文档时可能不足。
 ShmSize=256m
-# 基础加固：禁止提权；限制进程数/内存。
+# 基础加固：禁止提权；限制进程数与内存。
 NoNewPrivileges=true
 PidsLimit=512
-Memory=2g
+PodmanArgs=--memory=2g
+
 # 可选：持久化 CUPS spool 与 cups-pdf 输出。
 # Volume=just-print-cups:/var/spool/cups
 # Volume=just-print-cups-pdf:/var/spool/cups-pdf
@@ -44,8 +52,10 @@ Memory=2g
 # AddDevice=/dev/bus/usb:/dev/bus/usb
 # AddDevice=/dev/usb:/dev/usb
 # 需要更小权限时也可只映射具体节点，例如 AddDevice=/dev/usb/lp0:/dev/usb/lp0
-AutoUpdate=registry
-Pull=newer
+
+# 自动跟随 :latest（会跨越破坏性版本，谨慎开启）：
+# AutoUpdate=registry
+# Pull=newer
 
 [Service]
 Restart=on-failure

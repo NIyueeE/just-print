@@ -51,6 +51,27 @@ sudo systemctl enable --now just-print.service
 
 ## 环境变量
 
+只有 `JUST_PRINT_TOKEN` 是必填项（不设置则 fail-closed 拒绝启动）；其余变量都有
+默认值，**通常无需显式设置**。例如 `JUST_PRINT_ADDR`、`JUST_PRINT_WEB_DIR`、
+`JUST_PRINT_CUPS_URI` 已由镜像设为下表默认值，`JUST_PRINT_AUTO_USB=1`、
+`JUST_PRINT_CUPS_PDF=0`、`JUST_PRINT_DISCOVER_IPP=0` 由入口脚本默认——把它们写进
+unit / compose 只是冗余。
+
+> 令牌请放进 `EnvironmentFile`（600 权限），不要写 `Environment=JUST_PRINT_TOKEN=...`：
+> 后者会出现在 `systemctl show` / `podman inspect` 中，而且 systemd 对 `Environment=`
+> 会做 **% 说明符展开**（`%%` 变成 `%`，含 `%` 的令牌会被静默改写）；`EnvironmentFile`
+> 按字面读取，不做说明符展开。生成令牌用 `openssl rand -hex 32`。
+
+最小可用配置（Quadlet）示例：
+
+```ini
+[Container]
+Image=ghcr.io/niyueee/just-print:latest
+PublishPort=8080:8080
+EnvironmentFile=/etc/just-print/just-print.env   # 只放 JUST_PRINT_TOKEN
+Tmpfs=/tmp
+```
+
 | 变量 | 默认值 | 说明 |
 | --- | --- | --- |
 | `JUST_PRINT_TOKEN` | 无 | 准入令牌，建议 32 字节以上随机值；未配置或为空时服务拒绝启动（fail-closed） |
@@ -74,6 +95,9 @@ sudo systemctl enable --now just-print.service
 | `JUST_PRINT_IDEMPOTENCY_TTL_SECS` | `600` | 幂等键保留时长（秒） |
 | `JUST_PRINT_REQUEST_TIMEOUT_SECS` | `300` | 单个 HTTP 请求处理超时（秒） |
 | `RUST_LOG` | `info` | tracing 日志过滤（如 `just_print=debug`） |
+
+除 `JUST_PRINT_TOKEN` 外，上表所有变量都可以省略；`examples/` 下的 Compose /
+Quadlet / env 示例只保留必填项，可选项均以注释列出。
 
 ## 打印机配置
 
