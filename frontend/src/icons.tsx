@@ -233,6 +233,50 @@ export function DownloadIcon(props: IconProps) {
   )
 }
 
+export function XIcon(props: IconProps) {
+  return (
+    <Icon {...props}>
+      <line x1="18" x2="6" y1="6" y2="18" />
+      <line x1="6" x2="18" y1="6" y2="18" />
+    </Icon>
+  )
+}
+
+export function SunIcon(props: IconProps) {
+  return (
+    <Icon {...props}>
+      <circle cx="12" cy="12" r="4" />
+      <path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41" />
+    </Icon>
+  )
+}
+
+export function MoonIcon(props: IconProps) {
+  return (
+    <Icon {...props}>
+      <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z" />
+    </Icon>
+  )
+}
+
+export function BanIcon(props: IconProps) {
+  return (
+    <Icon {...props}>
+      <circle cx="12" cy="12" r="10" />
+      <line x1="4.93" x2="19.07" y1="4.93" y2="19.07" />
+    </Icon>
+  )
+}
+
+export function RedoIcon(props: IconProps) {
+  return (
+    <Icon {...props}>
+      <path d="M21 7v6h-6" />
+      <path d="M3 17a9 9 0 0 1 15-6.7L21 13" />
+    </Icon>
+  )
+}
+
 export function LogoMark({ size = 42, className }: IconProps) {
   return (
     <svg
@@ -258,24 +302,8 @@ export function LogoMark({ size = 42, className }: IconProps) {
       <rect x="14" y="10" width="20" height="12" rx="2.5" fill="#ebdbb2" />
       <path d="M17 10h14v6h-14z" fill="#a89984" opacity="0.45" />
       <rect x="13" y="35" width="22" height="6" rx="3" fill="#8ec07c" />
-      <rect
-        x="12"
-        y="25"
-        width="24"
-        height="3"
-        rx="1.5"
-        fill="#282828"
-        opacity="0.22"
-      />
-      <rect
-        x="18"
-        y="36"
-        width="12"
-        height="2"
-        rx="1"
-        fill="#282828"
-        opacity="0.25"
-      />
+      <rect x="12" y="25" width="24" height="3" rx="1.5" fill="#282828" opacity="0.22" />
+      <rect x="18" y="36" width="12" height="2" rx="1" fill="#282828" opacity="0.25" />
     </svg>
   )
 }

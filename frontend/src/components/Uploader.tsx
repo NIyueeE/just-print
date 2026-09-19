@@ -1,55 +1,95 @@
 import { useEffect, useRef, useState } from 'preact/hooks'
 import {
   ApiError,
-  type UploadResult,
+  deleteFile,
   errorMessage,
   fetchPreview,
-  isUnauthorized,
+  isAbortError,
   uploadFile,
+  type Formats,
 } from '../api'
-import type { Notice } from '../app'
+import { formatBytes } from '../format'
+import { useAuthGuard } from '../hooks/useAuthGuard'
 import {
   AlertIcon,
+  BanIcon,
   ChevronDownIcon,
   ChevronUpIcon,
   EyeIcon,
   FileTextIcon,
   SpinnerIcon,
   UploadIcon,
+  XIcon,
 } from '../icons'
-
-interface UploaderProps {
-  onUploaded: (upload: UploadResult) => void
-  onAuthFailure: () => void
-  onUploadInvalid: () => void
-  onNotice: (notice: Notice | null) => void
-}
-
-const ACCEPT =
-  '.123,.602,.abw,.bmp,.cdr,.cgm,.cmx,.csv,.cwk,.dbf,.dif,.doc,.docm,.docx,.dot,.dotm,.dotx,.dps,.dpt,.dxf,.emf,.emz,.eps,.et,.ett,.fb2,.fh,.fh1,.fh10,.fh11,.fh2,.fh3,.fh4,.fh5,.fh6,.fh7,.fh8,.fh9,.fodg,.fodp,.fods,.fodt,.gif,.gnm,.gnumeric,.htm,.html,.hwp,.jfif,.jif,.jpe,.jpeg,.jpg,.key,.lrf,.lwp,.mcw,.md,.met,.mov,.mp,.mw,.mwd,.numbers,.nx^d,.odc,.odg,.odm,.odp,.ods,.odt,.otg,.oth,.otm,.otp,.ots,.ott,.p65,.pages,.pbm,.pcd,.pct,.pcx,.pdb,.pdf,.pgm,.pict,.pm,.pm6,.pmd,.png,.pot,.potm,.potx,.ppm,.pps,.ppsx,.ppt,.pptm,.pptx,.psd,.psw,.pub,.qxd,.qxt,.ras,.rtf,.sda,.sdc,.sdd,.sdw,.slk,.stc,.std,.sti,.stw,.svg,.svgz,.svm,.sxc,.sxd,.sxg,.sxi,.sxs,.sxw,.sylk,.tab,.tga,.tif,.tiff,.tsv,.txt,.vdx,.vsd,.vsdm,.vsdx,.wb1,.wb2,.wdb,.webp,.wk1,.wk3,.wk4,.wks,.wmf,.wmz,.wn,.wpd,.wpg,.wps,.wpt,.wq1,.wq2,.wri,.xbm,.xhtml,.xlc,.xlk,.xlm,.xls,.xlsb,.xlsm,.xlsx,.xlt,.xltm,.xltx,.xlw,.xml,.xpm,.zabw,.zip,.zmf'
+import { createNotice, useAppDispatch, useAppState } from '../state'
+import './Uploader.css'
 
 type FileCategory = 'pdf' | 'office' | 'image' | 'text' | 'other'
 
 const OFFICE_EXTS = new Set([
-  'doc', 'docm', 'docx', 'dot', 'dotm', 'dotx', 'xls', 'xlsb', 'xlsm', 'xlsx',
-  'xlt', 'xltm', 'xltx', 'xlw', 'ppt', 'pptm', 'pptx', 'pot', 'potm', 'potx',
-  'pps', 'ppsx', 'odt', 'ods', 'odp', 'odg', 'rtf', 'csv', 'tsv', 'pages',
-  'numbers', 'key', 'pub', 'wps', 'wpd', 'et', 'ett', 'dps', 'dpt', 'mdb',
+  'doc',
+  'docm',
+  'docx',
+  'dot',
+  'dotm',
+  'dotx',
+  'xls',
+  'xlsb',
+  'xlsm',
+  'xlsx',
+  'xlt',
+  'xltm',
+  'xltx',
+  'xlw',
+  'ppt',
+  'pptm',
+  'pptx',
+  'pot',
+  'potm',
+  'potx',
+  'pps',
+  'ppsx',
+  'odt',
+  'ods',
+  'odp',
+  'odg',
+  'rtf',
+  'csv',
+  'tsv',
+  'pages',
+  'numbers',
+  'key',
+  'pub',
+  'wps',
+  'wpd',
+  'et',
+  'ett',
+  'dps',
+  'dpt',
 ])
 const IMAGE_EXTS = new Set([
-  'png', 'jpg', 'jpeg', 'jpe', 'jfif', 'gif', 'webp', 'bmp', 'tif', 'tiff',
-  'svg', 'svgz', 'psd', 'eps', 'emf', 'wmf', 'xbm', 'pbm', 'pgm', 'ppm',
+  'png',
+  'jpg',
+  'jpeg',
+  'jpe',
+  'jfif',
+  'gif',
+  'webp',
+  'bmp',
+  'tif',
+  'tiff',
+  'svg',
+  'svgz',
+  'psd',
+  'eps',
+  'emf',
+  'wmf',
+  'xbm',
+  'pbm',
+  'pgm',
+  'ppm',
 ])
 const TEXT_EXTS = new Set(['txt', 'md', 'htm', 'html', 'xhtml', 'xml', 'log'])
-
-function fileCategory(name: string): FileCategory {
-  const ext = name.split('.').pop()?.toLowerCase() ?? ''
-  if (ext === 'pdf') return 'pdf'
-  if (OFFICE_EXTS.has(ext)) return 'office'
-  if (IMAGE_EXTS.has(ext)) return 'image'
-  if (TEXT_EXTS.has(ext)) return 'text'
-  return 'other'
-}
 
 const CATEGORY_LABEL: Record<FileCategory, string> = {
   pdf: 'PDF',
@@ -59,208 +99,435 @@ const CATEGORY_LABEL: Record<FileCategory, string> = {
   other: '文件',
 }
 
-export function Uploader({
-  onUploaded,
-  onAuthFailure,
-  onUploadInvalid,
-  onNotice,
-}: UploaderProps) {
-  const [file, setFile] = useState<File | null>(null)
-  const [busy, setBusy] = useState(false)
-  const [upload, setUpload] = useState<UploadResult | null>(null)
-  const [previewUrl, setPreviewUrl] = useState<string | null>(null)
-  const [previewOpen, setPreviewOpen] = useState(true)
-  const [error, setError] = useState<string | null>(null)
+function fileExtension(name: string): string {
+  const index = name.lastIndexOf('.')
+  return index >= 0 ? name.slice(index + 1).toLowerCase() : ''
+}
+
+function fileCategory(name: string): FileCategory {
+  const ext = fileExtension(name)
+  if (ext === 'pdf') return 'pdf'
+  if (OFFICE_EXTS.has(ext)) return 'office'
+  if (IMAGE_EXTS.has(ext)) return 'image'
+  if (TEXT_EXTS.has(ext)) return 'text'
+  return 'other'
+}
+
+/** 客户端预校验：大小上限与扩展名都来自 `GET /api/formats`。 */
+export function validateFile(file: File, formats: Formats | null): string | null {
+  if (formats === null) {
+    return null
+  }
+  if (formats.max_upload_bytes > 0 && file.size > formats.max_upload_bytes) {
+    return `文件大小 ${formatBytes(file.size)} 超过上限 ${formatBytes(formats.max_upload_bytes)}。`
+  }
+  const ext = fileExtension(file.name)
+  if (ext.length === 0) {
+    return '无法识别文件扩展名，请选择带有扩展名的文件。'
+  }
+  const supported = formats.extensions.some((candidate) => candidate.toLowerCase() === ext)
+  if (!supported) {
+    return `不支持 .${ext} 格式，请查看下方支持格式说明。`
+  }
+  return null
+}
+
+export function friendlyUploadError(error: unknown): string {
+  if (error instanceof ApiError) {
+    switch (error.code) {
+      case 'payload_too_large':
+        return '文件超过服务器允许的大小上限。'
+      case 'unsupported_media_type':
+        return '服务器不支持该文件格式。'
+      case 'conversion_failed':
+        return '文档转换失败，请确认文件可以正常打开。'
+      case 'service_unavailable':
+        return error.retryAfterMs !== null
+          ? `服务繁忙，请约 ${Math.ceil(error.retryAfterMs / 1000)} 秒后重试。`
+          : '服务繁忙，请稍后重试。'
+      case 'timeout':
+        return '上传超时，请重试。'
+      case 'network':
+        return '网络异常，请检查连接后重试。'
+      default:
+        return error.message
+    }
+  }
+  return errorMessage(error)
+}
+
+export function Uploader() {
+  const state = useAppState()
+  const dispatch = useAppDispatch()
+  const authGuard = useAuthGuard()
+  const { upload, formats, formatsError } = state
   const [dragging, setDragging] = useState(false)
-  const previewUrlRef = useRef<string | null>(null)
+  const [previewOpen, setPreviewOpen] = useState(true)
+  const inputRef = useRef<HTMLInputElement>(null)
+  const uploadControllerRef = useRef<AbortController | null>(null)
+  const previewControllerRef = useRef<AbortController | null>(null)
+
+  const busy = upload.phase === 'uploading' || upload.phase === 'converting'
+  const accept = formats
+    ? formats.extensions.map((extension) => `.${extension}`).join(',')
+    : undefined
+
+  // 预览 blob URL 的回收：URL 变化或组件卸载时释放旧地址。
+  useEffect(() => {
+    const url = upload.previewUrl
+    return () => {
+      if (url !== null) {
+        URL.revokeObjectURL(url)
+      }
+    }
+  }, [upload.previewUrl])
 
   useEffect(() => {
     return () => {
-      clearPreview()
+      uploadControllerRef.current?.abort()
+      previewControllerRef.current?.abort()
     }
   }, [])
 
-  function clearPreview(): void {
-    if (previewUrlRef.current) {
-      URL.revokeObjectURL(previewUrlRef.current)
-      previewUrlRef.current = null
+  function openPicker(): void {
+    if (!busy) {
+      inputRef.current?.click()
     }
-    setPreviewUrl(null)
+  }
+
+  function selectFile(file: File | null): void {
+    if (file === null) {
+      dispatch({ type: 'upload/select', file: null })
+      return
+    }
+    const invalid = validateFile(file, formats)
+    if (invalid !== null) {
+      dispatch({ type: 'upload/select', file: null })
+      dispatch({ type: 'upload/error', message: invalid })
+      return
+    }
+    dispatch({ type: 'upload/select', file })
+    setPreviewOpen(true)
   }
 
   async function loadPreview(fileId: string): Promise<void> {
+    previewControllerRef.current?.abort()
+    const controller = new AbortController()
+    previewControllerRef.current = controller
+    dispatch({ type: 'upload/preview-loading' })
     try {
-      const blob = await fetchPreview(fileId)
-      const url = URL.createObjectURL(blob)
-      if (previewUrlRef.current) {
-        URL.revokeObjectURL(previewUrlRef.current)
+      const blob = await fetchPreview(fileId, controller.signal)
+      if (controller.signal.aborted) {
+        return
       }
-      previewUrlRef.current = url
-      setPreviewUrl(url)
+      dispatch({ type: 'upload/preview-ready', url: URL.createObjectURL(blob) })
     } catch (requestError) {
-      if (isUnauthorized(requestError)) {
-        onAuthFailure()
+      if (controller.signal.aborted || isAbortError(requestError)) {
         return
       }
-      if (requestError instanceof ApiError && requestError.status === 404) {
-        setError('文件已失效（服务可能已重启），请重新上传')
-        onUploadInvalid()
-        onNotice({ message: '服务已重启，请重新上传', kind: 'error' })
+      if (authGuard(requestError)) {
         return
       }
-      setError(`预览加载失败：${errorMessage(requestError)}`)
+      const message =
+        requestError instanceof ApiError && requestError.status === 404
+          ? '预览已过期（服务可能已重启或文件超过保留时间），请重新上传。'
+          : `预览加载失败：${errorMessage(requestError)}`
+      dispatch({ type: 'upload/preview-error', message })
     }
   }
 
   async function handleUpload(): Promise<void> {
-    if (!file || busy) {
+    const file = upload.file
+    if (file === null || busy) {
       return
     }
-    clearPreview()
-    setBusy(true)
-    setError(null)
-    onNotice(null)
+    const controller = new AbortController()
+    uploadControllerRef.current = controller
+    dispatch({ type: 'upload/start' })
     try {
-      const result = await uploadFile(file)
-      setUpload(result)
-      setPreviewOpen(true)
-      onUploaded(result)
+      const result = await uploadFile(file, {
+        signal: controller.signal,
+        onProgress: (percent) => dispatch({ type: 'upload/progress', percent }),
+      })
+      dispatch({ type: 'upload/success', result })
+      dispatch({
+        type: 'notice/add',
+        notice: createNotice('success', `文件「${result.name}」已转换完成`),
+      })
       void loadPreview(result.id)
     } catch (requestError) {
-      if (isUnauthorized(requestError)) {
-        onAuthFailure()
+      if (controller.signal.aborted || isAbortError(requestError)) {
+        dispatch({ type: 'upload/select', file })
+        dispatch({ type: 'notice/add', notice: createNotice('info', '已取消上传') })
         return
       }
-      setError(`上传失败：${errorMessage(requestError)}`)
+      if (authGuard(requestError)) {
+        return
+      }
+      dispatch({ type: 'upload/error', message: friendlyUploadError(requestError) })
     } finally {
-      setBusy(false)
+      if (uploadControllerRef.current === controller) {
+        uploadControllerRef.current = null
+      }
     }
   }
 
-  function formatSize(bytes: number): string {
-    if (bytes < 1024) {
-      return `${bytes} B`
-    }
-    if (bytes < 1024 * 1024) {
-      return `${(bytes / 1024).toFixed(1)} KiB`
-    }
-    return `${(bytes / (1024 * 1024)).toFixed(1)} MiB`
+  function cancelUpload(): void {
+    uploadControllerRef.current?.abort()
+    uploadControllerRef.current = null
   }
 
-  const category = file ? fileCategory(file.name) : null
+  /** 移除已选/已上传文件；已上传的会顺带请求 DELETE /api/files/{id}。 */
+  async function handleRemove(): Promise<void> {
+    const result = upload.result
+    dispatch({ type: 'upload/reset' })
+    if (result === null) {
+      return
+    }
+    try {
+      await deleteFile(result.id)
+    } catch (error) {
+      if (isAbortError(error)) {
+        return
+      }
+      if (authGuard(error)) {
+        return
+      }
+      if (error instanceof ApiError && error.code === 'conflict') {
+        dispatch({
+          type: 'notice/add',
+          notice: createNotice('info', '文件正在被打印或预览，暂未从服务器删除。'),
+        })
+        return
+      }
+      if (!(error instanceof ApiError && error.status === 404)) {
+        dispatch({
+          type: 'notice/add',
+          notice: createNotice('error', `删除服务器文件失败：${errorMessage(error)}`),
+        })
+      }
+    }
+  }
+
+  const category = upload.file !== null ? fileCategory(upload.file.name) : null
+  const maxSizeLabel =
+    formats !== null && formats.max_upload_bytes > 0
+      ? formatBytes(formats.max_upload_bytes)
+      : '由服务器限制'
+  const formatCount = formats?.extensions.length ?? null
 
   return (
-    <section class="card card-upload">
-      <div class="card-header">
-        <span class="step-badge">1</span>
-        <span class="card-icon">
+    <section class="card uploader" aria-labelledby="uploader-title">
+      <div class="card__header">
+        <span class="step-badge step-badge--upload" aria-hidden="true">
+          1
+        </span>
+        <span class="card__icon card__icon--upload" aria-hidden="true">
           <UploadIcon size={18} />
         </span>
-        <h2>上传文档</h2>
+        <h2 id="uploader-title">上传文档</h2>
       </div>
-      <p class="muted">支持 PDF、Office、图片、HTML、CSV 等 LibreOffice 可读取的 172 种扩展名格式，将统一转换为 PDF 后打印。</p>
+      <p class="muted">
+        {formatCount !== null
+          ? `支持 ${formatCount} 种扩展名格式（来自服务器 /api/formats），将统一转换为 PDF 后打印。`
+          : '支持 PDF、Office、图片、HTML、CSV 等格式，将统一转换为 PDF 后打印。'}
+      </p>
+      {formatsError !== null ? (
+        <div class="inline-hint inline-hint--warning" role="status">
+          <AlertIcon size={15} />
+          <span>无法读取支持格式列表，将由服务器在收到文件时校验：{formatsError}</span>
+        </div>
+      ) : null}
+
       <div
-        class={`drop-zone${dragging ? ' dragging' : ''}`}
+        class="uploader__dropzone"
+        data-phase={upload.phase}
+        data-dragging={dragging ? 'true' : 'false'}
+        onDragEnter={(event) => {
+          event.preventDefault()
+          if (!busy) setDragging(true)
+        }}
         onDragOver={(event) => {
           event.preventDefault()
-          setDragging(true)
+          if (!busy) setDragging(true)
         }}
-        onDragLeave={() => setDragging(false)}
+        onDragLeave={(event) => {
+          const related = event.relatedTarget
+          if (related instanceof Node && event.currentTarget.contains(related)) {
+            return
+          }
+          setDragging(false)
+        }}
         onDrop={(event) => {
           event.preventDefault()
           setDragging(false)
+          if (busy) return
           const dropped = event.dataTransfer?.files?.[0]
-          if (dropped) {
-            clearPreview()
-            setFile(dropped)
-            setUpload(null)
-            setError(null)
+          if (dropped !== undefined) {
+            selectFile(dropped)
           }
         }}
       >
         <input
-          id="file-input"
+          ref={inputRef}
+          id="uploader-file-input"
+          class="visually-hidden"
           type="file"
-          accept={ACCEPT}
+          accept={accept}
+          disabled={busy}
+          aria-label="选择要打印的文件"
+          aria-describedby="uploader-hint"
           onChange={(event) => {
-            const selected = (event.target as HTMLInputElement).files?.[0]
-            clearPreview()
-            setFile(selected ?? null)
-            setUpload(null)
-            setError(null)
+            const target = event.currentTarget
+            const selected = target.files?.[0] ?? null
+            selectFile(selected)
+            target.value = ''
           }}
         />
-        <span class="drop-icon">
-          {file ? <FileTextIcon size={26} /> : <UploadIcon size={26} />}
-        </span>
-        <label for="file-input" class="file-label">
-          {file ? (
-            <>
-              <span class="file-name-row">
-                {category ? (
-                  <span class={`file-chip file-chip-${category}`}>
-                    {CATEGORY_LABEL[category]}
-                  </span>
-                ) : null}
-                <strong>{file.name}</strong>
-              </span>
-              <span class="muted">{formatSize(file.size)} · 点击或拖拽可更换</span>
-            </>
-          ) : (
-            <>
-              <strong>点击选择文件，或将文件拖到这里</strong>
-              <span class="muted">单个文件，最大 64 MiB</span>
-            </>
-          )}
-        </label>
-        <button
-          type="button"
-          class="primary"
-          disabled={!file || busy}
-          onClick={() => void handleUpload()}
+        <div
+          class="uploader__target"
+          role="button"
+          tabIndex={0}
+          aria-label="选择要打印的文件，或将文件拖放到此处"
+          aria-describedby="uploader-hint"
+          aria-controls="uploader-file-input"
+          aria-disabled={busy || undefined}
+          onClick={openPicker}
+          onKeyDown={(event) => {
+            if (event.key === ' ' || event.key === 'Enter') {
+              event.preventDefault()
+              openPicker()
+            }
+          }}
         >
-          {busy ? (
-            <>
-              <SpinnerIcon size={16} />
-              上传转换中…
-            </>
+          <span class="uploader__icon" aria-hidden="true">
+            {upload.file !== null ? <FileTextIcon size={26} /> : <UploadIcon size={26} />}
+          </span>
+          {upload.file !== null ? (
+            <span class="uploader__file">
+              <span class="uploader__file-row">
+                {category !== null ? (
+                  <span class={`file-chip file-chip--${category}`}>{CATEGORY_LABEL[category]}</span>
+                ) : null}
+                <strong class="uploader__file-name">{upload.file.name}</strong>
+              </span>
+              <span class="muted">
+                {formatBytes(upload.file.size)} · 点击或拖拽可更换，按 Enter 打开文件选择器
+              </span>
+            </span>
           ) : (
-            <>
-              <UploadIcon size={16} />
-              上传并转换
-            </>
+            <span class="uploader__prompt">
+              <strong>点击选择文件，或将文件拖到这里</strong>
+              <span class="muted">
+                单个文件，最大 {maxSizeLabel}
+                {formatCount !== null ? ` · 支持 ${formatCount} 种格式` : ''}
+              </span>
+            </span>
           )}
-        </button>
+        </div>
+
+        <p class="uploader__hint" id="uploader-hint">
+          支持键盘操作：按 Tab 聚焦本区域，按 Enter 或空格打开文件选择器。
+        </p>
+
+        {busy ? (
+          <div class="uploader__progress" aria-busy="true">
+            <div class="uploader__progress-head">
+              <span>{upload.phase === 'converting' ? '服务器转换中…' : '正在上传…'}</span>
+              <span class="uploader__progress-value">{upload.progress}%</span>
+            </div>
+            <progress
+              class="uploader__progress-bar"
+              max={100}
+              value={upload.progress}
+              aria-label="上传进度"
+            />
+            <button type="button" class="ghost ghost--sm" onClick={cancelUpload}>
+              <BanIcon size={14} />
+              取消上传
+            </button>
+          </div>
+        ) : null}
+
+        <div class="uploader__actions">
+          <button
+            type="button"
+            class="primary"
+            disabled={upload.file === null || busy}
+            onClick={() => void handleUpload()}
+          >
+            {busy ? (
+              <>
+                <SpinnerIcon size={16} />
+                {upload.phase === 'converting' ? '转换中…' : '上传中…'}
+              </>
+            ) : (
+              <>
+                <UploadIcon size={16} />
+                上传并转换
+              </>
+            )}
+          </button>
+          {upload.file !== null && !busy ? (
+            <button type="button" class="ghost" onClick={() => void handleRemove()}>
+              <XIcon size={14} />
+              移除文件
+            </button>
+          ) : null}
+        </div>
       </div>
-      {error ? (
-        <p class="error">
+
+      {upload.error !== null ? (
+        <p class="uploader__error" role="alert">
           <AlertIcon size={15} />
-          {error}
+          <span>{upload.error}</span>
+          <button
+            type="button"
+            class="uploader__dismiss"
+            aria-label="关闭错误提示"
+            onClick={() => dispatch({ type: 'upload/select', file: upload.file })}
+          >
+            <XIcon size={14} />
+          </button>
         </p>
       ) : null}
-      {upload && previewUrl ? (
-        <div class="preview">
-          <div class="preview-head">
+
+      {upload.result !== null ? (
+        <div class="uploader__preview">
+          <div class="uploader__preview-head">
             <EyeIcon size={16} />
-            <h3>预览：{upload.name}</h3>
-            <span class="muted">（{formatSize(upload.size)}）</span>
+            <h3>预览：{upload.result.name}</h3>
+            <span class="muted">（{formatBytes(upload.result.size)}）</span>
             <button
               type="button"
-              class="ghost ghost-sm preview-toggle"
+              class="ghost ghost--sm uploader__preview-toggle"
               onClick={() => setPreviewOpen((open) => !open)}
               aria-expanded={previewOpen}
+              aria-controls="uploader-preview-frame"
             >
               {previewOpen ? <ChevronUpIcon size={14} /> : <ChevronDownIcon size={14} />}
               {previewOpen ? '收起' : '展开'}
             </button>
           </div>
-          {previewOpen ? <iframe title="PDF 预览" src={previewUrl} /> : null}
-        </div>
-      ) : null}
-      {upload && !previewUrl ? (
-        <div class="preview-loading">
-          <SpinnerIcon size={15} />
-          <span>预览加载中…</span>
+          {previewOpen ? (
+            upload.previewStatus === 'ready' && upload.previewUrl !== null ? (
+              <iframe
+                id="uploader-preview-frame"
+                class="uploader__preview-frame"
+                title={`转换后的 PDF 预览：${upload.result.name}`}
+                src={upload.previewUrl}
+              />
+            ) : upload.previewStatus === 'error' ? (
+              <p class="uploader__preview-note" role="status">
+                {upload.previewError}
+              </p>
+            ) : (
+              <p class="uploader__preview-note" role="status">
+                <SpinnerIcon size={15} />
+                预览加载中…
+              </p>
+            )
+          ) : null}
         </div>
       ) : null}
     </section>

@@ -1,0 +1,109 @@
+/* 全局通知：底部居中的提示堆栈 */
+
+.notices {
+  position: fixed;
+  bottom: calc(var(--space-6) + env(safe-area-inset-bottom));
+  left: 50%;
+  z-index: var(--z-toast);
+  width: min(560px, calc(100vw - var(--space-6)));
+  transform: translateX(-50%);
+  pointer-events: none;
+}
+
+.notices__list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.notice {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-4);
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-md);
+  color: var(--color-text);
+  font-size: var(--text-sm);
+  line-height: var(--leading-snug);
+  pointer-events: auto;
+  animation: notice-in var(--duration-slow) var(--ease-standard) both;
+}
+
+.notice__icon {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+}
+
+.notice__message {
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.notice__dismiss {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  color: var(--color-muted);
+  transition:
+    color var(--transition),
+    background-color var(--transition),
+    border-color var(--transition);
+}
+
+.notice__dismiss:hover {
+  background: var(--color-neutral-soft);
+  border-color: var(--color-border);
+  color: var(--color-text);
+}
+
+/* 成功 */
+.notice--success {
+  border-color: var(--color-success-border);
+}
+
+.notice--success .notice__icon {
+  color: var(--color-success-text);
+}
+
+/* 信息 */
+.notice--info {
+  border-color: var(--color-info-border);
+}
+
+.notice--info .notice__icon {
+  color: var(--color-info-text);
+}
+
+/* 错误：不自动消失，需要有明显边框 */
+.notice--error {
+  background: var(--color-surface);
+  border-color: var(--color-danger-border);
+  box-shadow:
+    var(--shadow-md),
+    inset 3px 0 0 var(--color-danger);
+}
+
+.notice--error .notice__icon {
+  color: var(--color-danger-text);
+}
+
+@media (max-width: 640px) {
+  .notices {
+    width: calc(100vw - var(--space-4) * 2);
+  }
+}

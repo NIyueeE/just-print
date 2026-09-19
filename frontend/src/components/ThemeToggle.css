@@ -1,0 +1,15 @@
+/* 主题切换按钮 */
+
+.theme-toggle {
+  padding: var(--space-2) var(--space-3);
+}
+
+.theme-toggle__label {
+  font-size: var(--text-sm);
+}
+
+@media (max-width: 420px) {
+  .theme-toggle__label {
+    display: none;
+  }
+}

@@ -1,0 +1,271 @@
+/* 任务状态列表 */
+
+.jobs__counts {
+  margin-top: var(--space-1);
+  color: var(--color-muted);
+  font-size: var(--text-sm);
+}
+
+.jobs__list {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: var(--space-3);
+  margin: var(--space-4) 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.jobs__clear {
+  margin-left: auto;
+}
+
+.job {
+  display: flex;
+  gap: var(--space-3);
+  align-items: flex-start;
+  padding: var(--space-3) var(--space-4);
+  background: var(--color-bg-elevated);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  transition:
+    border-color var(--transition),
+    box-shadow var(--transition);
+}
+
+.job:hover {
+  border-color: var(--color-border-strong);
+  box-shadow: var(--shadow-xs);
+}
+
+/* 六种展示状态（含 CUPS 清理后的 unknown）都各有一条规则 */
+.job--queued {
+  border-left: 3px solid var(--color-warning);
+}
+
+.job--printing {
+  border-left: 3px solid var(--color-info);
+}
+
+.job--completed {
+  border-left: 3px solid var(--color-success);
+}
+
+.job--failed {
+  border-left: 3px solid var(--color-danger);
+}
+
+.job--canceled {
+  border-left: 3px solid var(--color-border-strong);
+}
+
+.job--unknown {
+  border-left: 3px solid var(--color-surface-3);
+}
+
+.job__icon {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border-radius: var(--radius-sm);
+}
+
+.job__icon--queued {
+  background: var(--color-warning-soft);
+  color: var(--color-warning-text);
+}
+
+.job__icon--printing {
+  background: var(--color-info-soft);
+  color: var(--color-info-text);
+}
+
+.job__icon--completed {
+  background: var(--color-success-soft);
+  color: var(--color-success-text);
+}
+
+.job__icon--failed {
+  background: var(--color-danger-soft);
+  color: var(--color-danger-text);
+}
+
+.job__icon--canceled {
+  background: var(--color-neutral-soft);
+  color: var(--color-muted);
+}
+
+.job__icon--unknown {
+  background: var(--color-neutral-soft);
+  color: var(--color-muted);
+}
+
+.job__main {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: var(--space-1);
+  min-width: 0;
+}
+
+.job__topline {
+  display: flex;
+  gap: var(--space-2);
+  align-items: center;
+  min-width: 0;
+}
+
+.job__name {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--color-text);
+  font-size: var(--text-sm);
+  font-weight: var(--weight-semibold);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.job__subline {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1) var(--space-2);
+  align-items: baseline;
+  min-width: 0;
+}
+
+.job__printer {
+  display: inline-flex;
+  flex: 1 1 auto;
+  gap: var(--space-1);
+  align-items: center;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--color-muted);
+  font-size: var(--text-xs);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.job__printer svg {
+  flex: none;
+}
+
+.job__id,
+.job__time {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--color-muted);
+  font-size: var(--text-xs);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.badge {
+  flex: none;
+  padding: 2px var(--space-2);
+  border: 1px solid transparent;
+  border-radius: var(--radius-full);
+  font-size: var(--text-xs);
+  font-weight: var(--weight-medium);
+  white-space: nowrap;
+}
+
+.badge--queued {
+  background: var(--color-warning-soft);
+  border-color: var(--color-warning-border);
+  color: var(--color-warning-text);
+}
+
+.badge--printing {
+  background: var(--color-info-soft);
+  border-color: var(--color-info-border);
+  color: var(--color-info-text);
+}
+
+.badge--completed {
+  background: var(--color-success-soft);
+  border-color: var(--color-success-border);
+  color: var(--color-success-text);
+}
+
+.badge--failed {
+  background: var(--color-danger-soft);
+  border-color: var(--color-danger-border);
+  color: var(--color-danger-text);
+}
+
+.badge--canceled {
+  background: var(--color-neutral-soft);
+  border-color: var(--color-border);
+  color: var(--color-muted);
+}
+
+.badge--unknown {
+  background: var(--color-neutral-soft);
+  border-color: var(--color-border);
+  color: var(--color-muted);
+}
+
+.job__progress {
+  position: relative;
+  height: 3px;
+  margin-top: var(--space-1);
+  overflow: hidden;
+  background: var(--color-surface-2);
+  border-radius: var(--radius-full);
+}
+
+.job__progress::after {
+  position: absolute;
+  width: 42%;
+  height: 100%;
+  background: linear-gradient(90deg, var(--color-info), var(--color-info-text));
+  border-radius: var(--radius-full);
+  content: '';
+  animation: job-progress 1.2s ease-in-out infinite;
+}
+
+.job__error {
+  display: flex;
+  gap: var(--space-1);
+  align-items: flex-start;
+  margin-top: var(--space-1);
+  color: var(--color-danger-text);
+  font-size: var(--text-xs);
+  overflow-wrap: anywhere;
+}
+
+.job__error svg {
+  flex: none;
+  margin-top: 2px;
+}
+
+.job__note {
+  display: flex;
+  gap: var(--space-1);
+  align-items: center;
+  margin-top: var(--space-1);
+  color: var(--color-muted);
+  font-size: var(--text-xs);
+}
+
+.job__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  margin-top: var(--space-2);
+}
+
+@media (max-width: 1080px) {
+  .jobs__list {
+    grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  }
+}
+
+@media (max-width: 640px) {
+  .jobs__list {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}

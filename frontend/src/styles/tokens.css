@@ -1,0 +1,297 @@
+/* =============================================================================
+ * 设计令牌（design tokens）
+ *
+ * 层次：
+ *   1. 原始调色板：Gruvbox dark / light 的色相，仅供语义令牌引用；
+ *   2. 语义令牌：bg / surface / border / text / muted / interactive / danger ...
+ *      组件样式只允许使用语义令牌，禁止硬编码 hex/rgb；
+ *   3. 尺度令牌：间距、字号、行高、圆角、阴影、控件高度、层级、动效。
+ *
+ * 主题：
+ *   - 默认跟随 `prefers-color-scheme`；
+ *   - `<html data-theme="light|dark">` 为手动覆盖（由 src/theme.ts 写入 localStorage）。
+ *
+ * 对比度：所有“小字号文本在 surface 上”的组合均达到 WCAG AA 4.5:1，
+ * 具体数值见各语义令牌注释（dark 以 surface-2 #504945 为最亮背景校验，
+ * light 以 surface #fbf1c7 为最亮背景校验）。
+ * ========================================================================== */
+
+:root {
+  /* ---- Gruvbox dark 原始调色板 ---------------------------------------- */
+  --gbd-bg-hard: #1d2021;
+  --gbd-bg: #282828;
+  --gbd-bg-soft: #32302f;
+  --gbd-bg1: #3c3836;
+  --gbd-bg2: #504945;
+  --gbd-bg3: #665c54;
+  --gbd-bg4: #7c6f64;
+  --gbd-fg: #fbf1c7;
+  --gbd-fg1: #ebdbb2;
+  --gbd-red: #fb4934;
+  --gbd-red-text: #ff9d8b;
+  --gbd-green: #b8bb26;
+  --gbd-green-text: #cdd04a;
+  --gbd-yellow: #fabd2f;
+  --gbd-blue: #83a598;
+  --gbd-blue-text: #9fc7bb;
+  --gbd-purple: #d3869b;
+  --gbd-aqua: #8ec07c;
+  --gbd-orange: #fe8019;
+
+  /* ---- Gruvbox light 原始调色板 --------------------------------------- */
+  --gbl-bg-soft: #f2e5bc;
+  --gbl-bg: #fbf1c7;
+  --gbl-bg1: #ebdbb2;
+  --gbl-bg2: #d5c4a1;
+  --gbl-bg3: #bdae93;
+  --gbl-bg4: #a89984;
+  --gbl-fg: #282828;
+  --gbl-fg1: #3c3836;
+  --gbl-red: #cc241d;
+  --gbl-red-text: #9d0006;
+  --gbl-green: #79740e;
+  --gbl-green-text: #5f5b00;
+  --gbl-yellow: #d79921;
+  --gbl-blue: #458588;
+  --gbl-blue-text: #076678;
+  --gbl-purple: #b16286;
+  --gbl-aqua: #689d6a;
+  --gbl-orange: #d65d0e;
+
+  /* ---- 语义颜色（dark 默认值） ---------------------------------------- */
+  --color-bg: #282828; /* 页面背景 */
+  --color-bg-elevated: #1d2021; /* 输入框等凹陷背景 */
+  --color-surface: #3c3836; /* 卡片、对话框 */
+  --color-surface-2: #504945; /* 次级表面：提示条、进度槽 */
+  --color-surface-3: #665c54; /* 三级表面：分隔、悬停 */
+  --color-border: #504945;
+  --color-border-strong: #7c6f64; /* 输入控件边界，对 bg ≥ 3:1 */
+  --color-text: #ebdbb2; /* 对 surface 8.4:1，对 surface-2 6.4:1 */
+  --color-text-strong: #fbf1c7;
+  --color-muted: #cdbb9a; /* 对 surface 6.2:1，对 surface-2 4.7:1 */
+  --color-interactive: #fabd2f; /* 主操作 / 强调 */
+  --color-interactive-text: #1d2021; /* 主操作上的文字 */
+  --color-focus: #83a598; /* 焦点环，对 bg 5.5:1 */
+  --color-danger: #fb4934;
+  --color-danger-text: #ffa898; /* 对 surface 5.9:1，对 surface-2 4.8:1 */
+  --color-success: #b8bb26;
+  --color-success-text: #cdd04a; /* 对 surface 7.0:1，对 surface-2 5.3:1 */
+  --color-warning: #fabd2f;
+  --color-warning-text: #fabd2f; /* 对 surface 6.8:1，对 surface-2 5.2:1 */
+  --color-info: #83a598;
+  --color-info-text: #9fc7bb; /* 对 surface 6.3:1，对 surface-2 4.8:1 */
+  --color-overlay: rgb(0 0 0 / 0.62);
+  --color-selection: rgb(250 189 47 / 0.28);
+  --color-scrollbar: #665c54;
+  --color-scrollbar-hover: #7c6f64;
+  --color-primary-grad-from: #f3bf33;
+  --color-primary-grad-to: #fabd2f;
+  --color-primary-border: #d6a41f;
+  --color-danger-soft: rgb(251 73 52 / 0.1);
+  --color-danger-border: rgb(251 73 52 / 0.38);
+  --color-success-soft: rgb(184 187 38 / 0.12);
+  --color-success-border: rgb(184 187 38 / 0.4);
+  --color-warning-soft: rgb(250 189 47 / 0.12);
+  --color-warning-border: rgb(250 189 47 / 0.32);
+  --color-info-soft: rgb(131 165 152 / 0.12);
+  --color-info-border: rgb(131 165 152 / 0.34);
+  --color-neutral-soft: rgb(235 219 178 / 0.05);
+  --color-shadow-tint: rgb(0 0 0 / 0.28);
+  --app-aura-1: radial-gradient(920px 500px at 85% -10%, rgb(131 165 152 / 0.09), transparent 62%);
+  --app-aura-2: radial-gradient(760px 430px at -8% 28%, rgb(211 134 155 / 0.07), transparent 58%);
+  --app-aura-3: radial-gradient(720px 400px at 50% 112%, rgb(250 189 47 / 0.05), transparent 62%);
+
+  /* light 值先存为中间变量，供下方两处映射复用，避免调色板重复。 */
+  --theme-light-bg: var(--gbl-bg-soft);
+  --theme-light-bg-elevated: var(--gbl-bg);
+  --theme-light-surface: var(--gbl-bg);
+  --theme-light-surface-2: var(--gbl-bg-soft);
+  --theme-light-surface-3: var(--gbl-bg1);
+  --theme-light-border: var(--gbl-bg2);
+  --theme-light-border-strong: var(--gbd-bg4);
+  --theme-light-text: var(--gbl-fg1);
+  --theme-light-text-strong: var(--gbl-fg);
+  --theme-light-muted: #665c54; /* 对 #fbf1c7 5.7:1，对 #ebdbb2 4.8:1 */
+  --theme-light-interactive: var(--gbl-yellow);
+  --theme-light-interactive-text: var(--gbd-bg-hard);
+  --theme-light-focus: var(--gbl-blue-text);
+  --theme-light-danger: var(--gbl-red);
+  --theme-light-danger-text: var(--gbl-red-text); /* 对 #fbf1c7 8.2:1 */
+  --theme-light-success: var(--gbl-green);
+  --theme-light-success-text: var(--gbl-green-text); /* 对 #fbf1c7 6.2:1 */
+  --theme-light-warning: var(--gbl-yellow);
+  --theme-light-warning-text: #7a4f00; /* 对 #fbf1c7 6.0:1 */
+  --theme-light-info: var(--gbl-blue);
+  --theme-light-info-text: var(--gbl-blue-text); /* 对 #fbf1c7 5.8:1 */
+  --theme-light-overlay: rgb(40 40 40 / 0.5);
+  --theme-light-selection: rgb(215 153 33 / 0.35);
+  --theme-light-scrollbar: var(--gbl-bg3);
+  --theme-light-scrollbar-hover: var(--gbl-bg4);
+  --theme-light-primary-grad-from: #e6ac1f;
+  --theme-light-primary-grad-to: var(--gbl-yellow);
+  --theme-light-primary-border: #b57614;
+  --theme-light-shadow-tint: rgb(60 56 54 / 0.22);
+
+  /* ---- 间距 ------------------------------------------------------------ */
+  --space-1: 0.25rem; /* 4 */
+  --space-2: 0.5rem; /* 8 */
+  --space-3: 0.75rem; /* 12 */
+  --space-4: 1rem; /* 16 */
+  --space-5: 1.25rem; /* 20 */
+  --space-6: 1.5rem; /* 24 */
+  --space-7: 2rem; /* 32 */
+  --space-8: 3rem; /* 48 */
+
+  /* ---- 字体 ------------------------------------------------------------ */
+  --font-sans:
+    system-ui, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', sans-serif;
+  --font-mono: ui-monospace, 'Cascadia Code', 'SFMono-Regular', Consolas, monospace;
+  --text-xs: 0.75rem; /* 12 */
+  --text-sm: 0.8125rem; /* 13 */
+  --text-base: 0.9375rem; /* 15 */
+  --text-lg: 1.125rem; /* 18 */
+  --text-xl: 1.375rem; /* 22 */
+  --text-2xl: 1.625rem; /* 26 */
+  --leading-tight: 1.2;
+  --leading-snug: 1.4;
+  --leading-normal: 1.55;
+  --leading-relaxed: 1.7;
+  --weight-normal: 400;
+  --weight-medium: 500;
+  --weight-semibold: 600;
+  --weight-bold: 700;
+
+  /* ---- 圆角 ------------------------------------------------------------ */
+  --radius-xs: 4px;
+  --radius-sm: 8px;
+  --radius-md: 12px;
+  --radius-lg: 16px;
+  --radius-xl: 22px;
+  --radius-full: 999px;
+
+  /* ---- 阴影 ------------------------------------------------------------ */
+  --shadow-xs: 0 1px 2px var(--color-shadow-tint);
+  --shadow-sm: 0 1px 3px var(--color-shadow-tint);
+  --shadow-md: 0 8px 28px var(--color-shadow-tint);
+  --shadow-lg: 0 18px 52px var(--color-shadow-tint);
+  --shadow-focus: 0 0 0 3px rgb(131 165 152 / 0.34);
+
+  /* ---- 控件高度 -------------------------------------------------------- */
+  --control-h-sm: 2rem; /* 32 */
+  --control-h-md: 2.5rem; /* 40 */
+  --control-h-lg: 2.75rem; /* 44，触控最小尺寸 */
+
+  /* ---- 层级 ------------------------------------------------------------ */
+  --z-base: 1;
+  --z-sticky: 30;
+  --z-overlay: 40;
+  --z-modal: 50;
+  --z-toast: 60;
+
+  /* ---- 动效 ------------------------------------------------------------ */
+  --duration-fast: 120ms;
+  --duration-base: 180ms;
+  --duration-slow: 320ms;
+  --ease-standard: cubic-bezier(0.2, 0, 0, 1);
+  --ease-emphasized: cubic-bezier(0.2, 0, 0, 1.4);
+
+  --transition: var(--duration-base) var(--ease-standard);
+}
+
+/* 手动切换到浅色：<html data-theme="light"> */
+:root[data-theme='light'] {
+  color-scheme: light;
+
+  --color-bg: var(--theme-light-bg);
+  --color-bg-elevated: var(--theme-light-bg-elevated);
+  --color-surface: var(--theme-light-surface);
+  --color-surface-2: var(--theme-light-surface-2);
+  --color-surface-3: var(--theme-light-surface-3);
+  --color-border: var(--theme-light-border);
+  --color-border-strong: var(--theme-light-border-strong);
+  --color-text: var(--theme-light-text);
+  --color-text-strong: var(--theme-light-text-strong);
+  --color-muted: var(--theme-light-muted);
+  --color-interactive: var(--theme-light-interactive);
+  --color-interactive-text: var(--theme-light-interactive-text);
+  --color-focus: var(--theme-light-focus);
+  --color-danger: var(--theme-light-danger);
+  --color-danger-text: var(--theme-light-danger-text);
+  --color-success: var(--theme-light-success);
+  --color-success-text: var(--theme-light-success-text);
+  --color-warning: var(--theme-light-warning);
+  --color-warning-text: var(--theme-light-warning-text);
+  --color-info: var(--theme-light-info);
+  --color-info-text: var(--theme-light-info-text);
+  --color-overlay: var(--theme-light-overlay);
+  --color-selection: var(--theme-light-selection);
+  --color-scrollbar: var(--theme-light-scrollbar);
+  --color-scrollbar-hover: var(--theme-light-scrollbar-hover);
+  --color-primary-grad-from: var(--theme-light-primary-grad-from);
+  --color-primary-grad-to: var(--theme-light-primary-grad-to);
+  --color-primary-border: var(--theme-light-primary-border);
+  --color-shadow-tint: var(--theme-light-shadow-tint);
+  --color-danger-soft: rgb(157 0 6 / 0.08);
+  --color-danger-border: rgb(157 0 6 / 0.35);
+  --color-success-soft: rgb(95 91 0 / 0.1);
+  --color-success-border: rgb(95 91 0 / 0.35);
+  --color-warning-soft: rgb(122 79 0 / 0.1);
+  --color-warning-border: rgb(122 79 0 / 0.32);
+  --color-info-soft: rgb(7 102 120 / 0.09);
+  --color-info-border: rgb(7 102 120 / 0.32);
+  --color-neutral-soft: rgb(60 56 54 / 0.05);
+  --shadow-focus: 0 0 0 3px rgb(7 102 120 / 0.28);
+  --app-aura-1: radial-gradient(920px 500px at 85% -10%, rgb(7 102 120 / 0.06), transparent 62%);
+  --app-aura-2: radial-gradient(760px 430px at -8% 28%, rgb(143 63 113 / 0.05), transparent 58%);
+  --app-aura-3: radial-gradient(720px 400px at 50% 112%, rgb(181 118 20 / 0.06), transparent 62%);
+}
+
+/* 跟随系统浅色（未手动指定 dark 时生效） */
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme='dark']) {
+    color-scheme: light;
+
+    --color-bg: var(--theme-light-bg);
+    --color-bg-elevated: var(--theme-light-bg-elevated);
+    --color-surface: var(--theme-light-surface);
+    --color-surface-2: var(--theme-light-surface-2);
+    --color-surface-3: var(--theme-light-surface-3);
+    --color-border: var(--theme-light-border);
+    --color-border-strong: var(--theme-light-border-strong);
+    --color-text: var(--theme-light-text);
+    --color-text-strong: var(--theme-light-text-strong);
+    --color-muted: var(--theme-light-muted);
+    --color-interactive: var(--theme-light-interactive);
+    --color-interactive-text: var(--theme-light-interactive-text);
+    --color-focus: var(--theme-light-focus);
+    --color-danger: var(--theme-light-danger);
+    --color-danger-text: var(--theme-light-danger-text);
+    --color-success: var(--theme-light-success);
+    --color-success-text: var(--theme-light-success-text);
+    --color-warning: var(--theme-light-warning);
+    --color-warning-text: var(--theme-light-warning-text);
+    --color-info: var(--theme-light-info);
+    --color-info-text: var(--theme-light-info-text);
+    --color-overlay: var(--theme-light-overlay);
+    --color-selection: var(--theme-light-selection);
+    --color-scrollbar: var(--theme-light-scrollbar);
+    --color-scrollbar-hover: var(--theme-light-scrollbar-hover);
+    --color-primary-grad-from: var(--theme-light-primary-grad-from);
+    --color-primary-grad-to: var(--theme-light-primary-grad-to);
+    --color-primary-border: var(--theme-light-primary-border);
+    --color-shadow-tint: var(--theme-light-shadow-tint);
+    --color-danger-soft: rgb(157 0 6 / 0.08);
+    --color-danger-border: rgb(157 0 6 / 0.35);
+    --color-success-soft: rgb(95 91 0 / 0.1);
+    --color-success-border: rgb(95 91 0 / 0.35);
+    --color-warning-soft: rgb(122 79 0 / 0.1);
+    --color-warning-border: rgb(122 79 0 / 0.32);
+    --color-info-soft: rgb(7 102 120 / 0.09);
+    --color-info-border: rgb(7 102 120 / 0.32);
+    --color-neutral-soft: rgb(60 56 54 / 0.05);
+    --shadow-focus: 0 0 0 3px rgb(7 102 120 / 0.28);
+    --app-aura-1: radial-gradient(920px 500px at 85% -10%, rgb(7 102 120 / 0.06), transparent 62%);
+    --app-aura-2: radial-gradient(760px 430px at -8% 28%, rgb(143 63 113 / 0.05), transparent 58%);
+    --app-aura-3: radial-gradient(720px 400px at 50% 112%, rgb(181 118 20 / 0.06), transparent 62%);
+  }
+}
