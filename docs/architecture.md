@@ -65,6 +65,12 @@ just-print/
   `copies`、`number-up`、`media-type`、`output-bin`、
   `orientation-requested`、`finishings`），编码为 `Print-Job` 的 job 模板属性，
   不使用 PPD / `lpoptions` 名称。
+- 分辨率额外发一个 CUPS 兼容属性：cupsd 把 IPP `printer-resolution` 序列化成
+  `1200x1200dpi` 传给过滤器，而 libcups 的 `cupsMarkOptions()` 只拿取值去匹配
+  PPD choice 名（通常是 `1200dpi`），标准属性因此被静默忽略、分辨率退回 PPD
+  默认值。所以后端在标准属性之外附带同值的 PPD 风格属性
+  `Resolution=<N>dpi`（`src/cups/options.rs`）：PPD 队列据此生效，其它队列把
+  它当未知属性忽略。
 - 打印机快照带 10 秒 TTL 缓存 + singleflight 刷新；任务状态带 2 秒 TTL 缓存。
   前端轮询因此不会放大成 CUPS 请求风暴。
 - 队列由入口脚本创建：镜像内置 HPLIP PCL 驱动（`printer-driver-hpcups`），USB

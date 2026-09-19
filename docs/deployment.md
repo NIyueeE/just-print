@@ -193,6 +193,20 @@ PPD 里双面受一个**可安装选项**（`Option1` / `OptionDuplex`，人类�
 - 取值写错时：不带 `=` 的条目会被忽略并打 warning；若 `lpadmin` 拒绝该选项，入口
   脚本会退回「不带任何选项」重新建队列，保证打印机不会因为一个拼写错误而消失。
 
+### 分辨率选项为什么不用手配
+
+CUPS 在 PPD 队列上把 `printer-resolution` 的取值交给 `cupsMarkOptions()`，而它只按
+PPD choice 名（通常是 `<N>dpi`）匹配；cupsd 自己序列化出来的却是 `1200x1200dpi`，
+两者对不上，标准属性会被**静默忽略**、分辨率悄悄退回 PPD 默认值——`gs` 拿到的是
+`-r600x600` 而不是界面选的 1200dpi（v0.3.5 及更早版本的行为）。
+
+v0.3.6 起后端会自动附带一个 PPD 风格的同值属性 `Resolution=<N>dpi`（见
+[架构文档](architecture.md)），无需部署者额外配置。排查时可在容器内确认：
+
+```bash
+grep 'Ghostscript command line' /var/log/cups/error_log | tail -1   # 看 -r 是否等于界面选择
+```
+
 只有 CUPS 中可见的打印机会出现在 `/api/printers`；前端控制项直接来自 IPP 的
 `*-supported` / `*-default` 打印机属性，而不是 PPD / `lpoptions` 名称或 PJL 能力查询。
 
