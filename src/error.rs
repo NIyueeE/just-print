@@ -72,6 +72,7 @@ impl From<crate::cups::CupsError> for AppError {
             CupsError::Timeout => Self::GatewayTimeout("CUPS 响应超时".to_string()),
             CupsError::NotFound => Self::NotFound,
             CupsError::Invalid(message) => Self::BadRequest(message),
+            CupsError::Conflict(message) => Self::Conflict(message),
             CupsError::PrinterUnavailable(message) => Self::PrinterUnavailable(message),
             CupsError::Protocol(message) => Self::BadGateway(format!("CUPS 响应异常: {message}")),
         }

@@ -51,6 +51,9 @@ pub enum CupsError {
     /// 请求参数不合法（IPP 客户端错误）。
     #[error("{0}")]
     Invalid(String),
+    /// 资源当前状态不允许该操作（如已结束的任务无法取消）。
+    #[error("{0}")]
+    Conflict(String),
     /// 打印机存在但当前不可用。
     #[error("打印机不可用: {0}")]
     PrinterUnavailable(String),
@@ -67,8 +70,9 @@ impl CupsError {
             ClientErrorAttributesOrValuesNotSupported, ClientErrorBadRequest,
             ClientErrorConflictingAttributes, ClientErrorDocumentFormatError,
             ClientErrorDocumentFormatNotSupported, ClientErrorGone, ClientErrorNotFound,
-            ClientErrorRequestValueTooLong, ServerErrorBusy, ServerErrorDeviceError,
-            ServerErrorNotAcceptingJobs, ServerErrorServiceUnavailable, ServerErrorTemporaryError,
+            ClientErrorNotPossible, ClientErrorRequestValueTooLong, ServerErrorBusy,
+            ServerErrorDeviceError, ServerErrorNotAcceptingJobs, ServerErrorServiceUnavailable,
+            ServerErrorTemporaryError,
         };
         let detail = if message.is_empty() {
             status.to_string()
@@ -83,6 +87,7 @@ impl CupsError {
             | ClientErrorDocumentFormatNotSupported
             | ClientErrorDocumentFormatError
             | ClientErrorRequestValueTooLong => Self::Invalid(detail),
+            ClientErrorNotPossible => Self::Conflict(detail),
             ServerErrorNotAcceptingJobs
             | ServerErrorBusy
             | ServerErrorTemporaryError
