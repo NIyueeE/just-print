@@ -341,6 +341,7 @@ impl CupsClient {
         }
         let uri = self.printer_uri(printer_name)?;
         let operation = IppOperationBuilder::get_job_attributes(uri.clone(), cups_job_id)
+            .user_name(CUPS_USER)
             .build()
             .map_err(CupsError::from)?;
         let info = match self.send(operation, &uri, "get-job-attributes").await {
@@ -373,6 +374,7 @@ impl CupsClient {
             IppRequestResponse::new(IppVersion::v1_1(), Operation::GetJobs, Some(uri.clone()))
                 .map_err(CupsError::from)?;
         add_keyword_attribute(&mut request, "which-jobs", "all")?;
+        add_name_attribute(&mut request, "requesting-user-name", CUPS_USER)?;
         add_requested_attributes(
             &mut request,
             &[
@@ -401,7 +403,10 @@ impl CupsClient {
     /// CUPS 不可达、超时、任务不存在或拒绝取消时返回 [`CupsError`]。
     pub async fn cancel_job(&self, printer_name: &str, cups_job_id: i32) -> Result<(), CupsError> {
         let uri = self.printer_uri(printer_name)?;
+        // CUPS 会校验 requesting-user-name 与任务属主一致；缺少该属性时
+        // Cancel-Job 以 HTTP 403 拒绝，必须在请求中带上同一用户。
         let operation = IppOperationBuilder::cancel_job(uri.clone(), cups_job_id)
+            .user_name(CUPS_USER)
             .build()
             .map_err(CupsError::from)?;
         self.send(operation, &uri, "cancel-job").await?;
@@ -545,6 +550,18 @@ fn add_keyword_attribute(
     value: &str,
 ) -> Result<(), CupsError> {
     let attribute = IppAttribute::with_name(name, IppValue::new_keyword(value)?)?;
+    request
+        .attributes_mut()
+        .add(DelimiterTag::OperationAttributes, attribute);
+    Ok(())
+}
+
+fn add_name_attribute(
+    request: &mut IppRequestResponse,
+    name: &str,
+    value: &str,
+) -> Result<(), CupsError> {
+    let attribute = IppAttribute::with_name(name, IppValue::new_name_without_language(value)?)?;
     request
         .attributes_mut()
         .add(DelimiterTag::OperationAttributes, attribute);
