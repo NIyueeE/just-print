@@ -214,10 +214,24 @@ PPD 里双面受一个**可安装选项**（`Option1` / `OptionDuplex`，人类�
 
 ## USB 设备透传
 
-CUPS 的 `usb` 后端基于 libusb，容器需要映射 `/dev/bus/usb`；个别场景还需要
-`/dev/usb/lp*` 设备节点。Compose 与 Quadlet 示例中已给出注释模板。容器启动后
-新增的 USB 设备可能不会自动出现在映射中，通常需要按宿主机 udev 策略或重启容器。
-自动枚举依赖 `/dev/bus/usb` 已映射进容器。
+CUPS 的 `usb` 后端基于 **libusb**（Debian 打包的后端直接链接 `libusb-1.0.so.0`，
+代码里没有任何 `/dev/usb/lp*` 路径），它通过 `/dev/bus/usb`（usbfs）访问设备，
+因此**只需要映射 `/dev/bus/usb`**：
+
+```ini
+AddDevice=/dev/bus/usb:/dev/bus/usb
+```
+
+- **不要映射 `/dev/usb/lp*`**：那是旧 `usblp` 内核驱动的字符设备，libusb 路径不使用；
+  而且该节点通常不存在（需宿主机加载 `usblp` 且打印机恰好是 `lp0`），
+  `AddDevice=` 指向不存在的设备会让容器**直接启动失败**。
+- libusb 后端在需要时会自行 detach `usblp`（日志里可见
+  `Failed to detach "usblp" module ...`）；若 detach 失败，多半是宿主机上有其它
+  进程占用设备，可在宿主机屏蔽该模块（`modprobe.blacklist=usblp`）。
+- rootless Podman 下，运行容器的用户需要对 `/dev/bus/usb/*` 有读写权限
+  （通常加入 `lp` 组，或配置 udev 规则）。
+- 容器启动后新增的 USB 设备可能不会自动出现，通常需要按宿主机 udev 策略处理或
+  重启容器；自动枚举依赖 `/dev/bus/usb` 已映射进容器。
 
 ## 临时文件
 
