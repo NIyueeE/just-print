@@ -50,9 +50,44 @@ usb_extra_options() {
   printf '%s' "${JUST_PRINT_USB_OPTIONS:-}" | tr ',' ' '
 }
 
-# 依据 USB 型号从 `lpinfo -m` 中挑选 PPD；找不到时输出空串。
-# 依次尝试：完整型号 → 把前导 lj 还原成 laserjet → 去掉能力后缀的系列名，
-# 并优先选择厂商 PPD（避免总是落到 sample.drv 的通用驱动）。
+# USB URI 的厂商/型号字段可能带 %20 等转义；还原常见的空格与加号。
+usb_decode() {
+  sed -e 's/+/ /g' -e 's/%20/ /g'
+}
+
+# 取 usb://MFG/MDL?serial=... 的厂商字段（第一段路径）。
+usb_mfg() {
+  printf '%s' "$1" | sed -E 's#^usb://##; s#[?].*$##; s#/.*$##' | usb_decode
+}
+
+# 取 usb://MFG/MDL?serial=... 的型号字段（第二段路径）。
+usb_mdl() {
+  printf '%s' "$1" | sed -E 's#^usb://##; s#[?].*$##; s#^[^/]*/##; s#/.*$##' | usb_decode
+}
+
+# 组装 IEEE 1284 device-id 片段，供 `lpinfo -m --device-id` 使用。
+usb_device_id() {
+  _id=""
+  if [ -n "$1" ]; then
+    _id="MFG:$1;"
+  fi
+  if [ -n "$2" ]; then
+    _id="${_id}MDL:$2;"
+  fi
+  printf '%s' "$_id"
+}
+
+# 厂商是否为 HP；模糊匹配只在 HP 上使用，避免把其它厂商的型号猜成 HP PPD。
+is_hp_vendor() {
+  case "$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]')" in
+    hp | hewlett-packard | hewlett*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+# 依据型号从 `lpinfo -m` 中做保守的模糊匹配（仅 HP）：
+# 依次尝试完整型号 → 前导 lj 还原为 laserjet → 去掉能力后缀的系列名，
+# 并优先厂商 PPD（避免落到 sample.drv 的通用驱动）。
 match_ppd() {
   _model="$1"
   _list="$2"
@@ -84,9 +119,16 @@ match_ppd() {
 }
 
 # 自动添加 USB 打印机队列（默认开启；JUST_PRINT_AUTO_USB=0 关闭）。
-# 需要容器映射 /dev/bus/usb 供 lpinfo 枚举；PPD 优先按型号匹配（镜像内置
-# HPLIP PCL 驱动），可用 JUST_PRINT_USB_PPD 固定；JUST_PRINT_USB_OPTIONS
-# 可声明硬件相关的 PPD 选项（如双面器 Option1=True / OptionDuplex=True）。
+# 需要容器映射 /dev/bus/usb 供 lpinfo 枚举。
+#
+# 驱动选择顺序（与 CUPS 的标准流程一致）：
+#   1) 用 USB URI 里的厂商/型号拼出 1284 device-id，交给 `lpinfo -m --device-id`
+#      由 CUPS 匹配带 1284DeviceID 的 PPD（厂商+型号都要匹配，不会串厂商）；
+#   2) 仍无结果且厂商是 HP 时，才用型号做保守模糊匹配（覆盖设备上报 MFG:HP、
+#      而 PPD 写 MFG:Hewlett-Packard 这类对不上的情况）；
+#   3) 最后回落到通用 PCL PPD，并提示可用 JUST_PRINT_USB_PPD 固定驱动。
+# `JUST_PRINT_USB_OPTIONS` 用于声明硬件相关的 PPD 选项（如双面器
+# OptionDuplex=True / Option1=True）。
 auto_add_usb_printers() {
   if [ "${JUST_PRINT_AUTO_USB:-1}" = "0" ]; then
     return 0
@@ -102,8 +144,10 @@ auto_add_usb_printers() {
   extra_options="$(usb_extra_options)"
 
   printf '%s\n' "$usb_uris" | while IFS= read -r uri; do
-    model="$(printf '%s' "$uri" |
-      sed -E 's#^usb://##; s#[?].*$##; s#.*/##; s#[^A-Za-z0-9]+#-#g; s#^-+##; s#-+$##' |
+    mfg="$(usb_mfg "$uri")"
+    mdl="$(usb_mdl "$uri")"
+    model="$(printf '%s' "$mdl" |
+      sed -E 's#[^A-Za-z0-9]+#-#g; s#^-+##; s#-+$##' |
       tr '[:upper:]' '[:lower:]')"
     serial="$(printf '%s' "$uri" |
       sed -n 's/.*[?&]serial=\([^&]*\).*/\1/p' |
@@ -142,10 +186,20 @@ auto_add_usb_printers() {
     fi
 
     ppd="$default_ppd"
-    if [ -z "${JUST_PRINT_USB_PPD:-}" ] && [ -n "$model" ]; then
-      matched="$(match_ppd "$model" "$ppd_list" || true)"
+    if [ -z "${JUST_PRINT_USB_PPD:-}" ]; then
+      matched=""
+      device_id="$(usb_device_id "$mfg" "$mdl")"
+      if [ -n "$device_id" ]; then
+        matched="$(lpinfo -m --device-id "$device_id" 2>/dev/null | head -n 1 | cut -d' ' -f1)"
+      fi
+      if [ -z "$matched" ] && is_hp_vendor "$mfg"; then
+        matched="$(match_ppd "$model" "$ppd_list" || true)"
+      fi
       if [ -n "$matched" ]; then
         ppd="$matched"
+      else
+        echo "note: 未找到 $mfg $mdl 的专用驱动（device-id: $device_id），使用通用 PPD $ppd" >&2
+        echo "note: 如需指定厂商 PPD，设置 JUST_PRINT_USB_PPD（驱动 URI 或 PPD 路径）" >&2
       fi
     fi
 
