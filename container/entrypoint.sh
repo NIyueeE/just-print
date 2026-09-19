@@ -140,7 +140,7 @@ auto_add_usb_printers() {
   fi
 
   ppd_list="$(lpinfo -m 2>/dev/null || true)"
-  default_ppd="${JUST_PRINT_USB_PPD:-drv:///sample.drv/generpcl.ppd}"
+  generic_ppd="drv:///sample.drv/generpcl.ppd"
   extra_options="$(usb_extra_options)"
 
   printf '%s\n' "$usb_uris" | while IFS= read -r uri; do
@@ -185,7 +185,7 @@ auto_add_usb_printers() {
       continue
     fi
 
-    ppd="$default_ppd"
+    ppd="${JUST_PRINT_USB_PPD:-$generic_ppd}"
     if [ -z "${JUST_PRINT_USB_PPD:-}" ]; then
       matched=""
       device_id="$(usb_device_id "$mfg" "$mdl")"
@@ -198,34 +198,46 @@ auto_add_usb_printers() {
       if [ -n "$matched" ]; then
         ppd="$matched"
       else
-        echo "note: 未找到 $mfg $mdl 的专用驱动（device-id: $device_id），使用通用 PPD $ppd" >&2
+        echo "note: 未找到 $mfg $mdl 的专用驱动（device-id: $device_id），使用通用 PPD $generic_ppd" >&2
         echo "note: 如需指定厂商 PPD，设置 JUST_PRINT_USB_PPD（驱动 URI 或 PPD 路径）" >&2
       fi
     fi
 
     set -- -p "$name" -E -v "$uri" -m "$ppd"
-    base_args=$#
+    added_options=0
     for opt in $extra_options; do
       case "$opt" in
-        *=*) set -- "$@" -o "$opt" ;;
+        *=*)
+          set -- "$@" -o "$opt"
+          added_options=1
+          ;;
         *) echo "warning: 忽略非法的 JUST_PRINT_USB_OPTIONS 项: $opt" >&2 ;;
       esac
     done
     if lpadmin "$@" >/dev/null 2>&1; then
       echo "auto-added USB printer: $name ($uri, $ppd)"
-    elif [ "$#" -gt "$base_args" ]; then
+      continue
+    fi
+    if [ "$added_options" = "1" ]; then
       # 选项名/值不被该 PPD 接受时，退回不带选项重试，避免因一个拼写错误
       # 导致整台打印机都建不出来。
-      echo "warning: lpadmin 拒绝 JUST_PRINT_USB_OPTIONS，改为不带选项添加 $name" >&2
+      echo "warning: lpadmin 拒绝 JUST_PRINT_USB_OPTIONS，改为不带选项重试 $name" >&2
       set -- -p "$name" -E -v "$uri" -m "$ppd"
       if lpadmin "$@" >/dev/null 2>&1; then
         echo "auto-added USB printer (without options): $name ($uri, $ppd)"
-      else
-        echo "warning: failed to auto-add USB printer $name ($uri, $ppd)" >&2
+        continue
       fi
-    else
-      echo "warning: failed to auto-add USB printer $name ($uri, $ppd)" >&2
     fi
+    if [ "$ppd" != "$generic_ppd" ]; then
+      # PPD 不可用（例如 JUST_PRINT_USB_PPD 写错）时回落到通用 PPD。
+      echo "warning: PPD $ppd 不可用，回落到通用 PPD $generic_ppd" >&2
+      set -- -p "$name" -E -v "$uri" -m "$generic_ppd"
+      if lpadmin "$@" >/dev/null 2>&1; then
+        echo "auto-added USB printer (generic PPD): $name ($uri, $generic_ppd)"
+        continue
+      fi
+    fi
+    echo "warning: failed to auto-add USB printer $name ($uri, $ppd)" >&2
   done
 }
 
