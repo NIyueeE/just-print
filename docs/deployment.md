@@ -86,10 +86,38 @@ CUPS 在容器启动时由入口脚本拉起，打印机可以通过以下任一
 - 调试：`JUST_PRINT_CUPS_PDF=1` 时入口脚本自动添加 `CUPS-PDF` 打印机，输出 PDF
   到容器内 `/var/spool/cups-pdf/<用户名>`，适合没有真实打印机的 WSL 环境。
 - USB 自动配置：默认开启（`JUST_PRINT_AUTO_USB=1`）。入口脚本启动时通过
-  `lpinfo` 枚举 USB 打印机，优先按型号匹配厂商 PPD（镜像内置 HPLIP PCL 驱动，
-  见下节），找不到才用通用 PCL；已有同名队列会跳过（但仍会应用
-  `JUST_PRINT_USB_OPTIONS`）。
+  `lpinfo` 枚举 USB 打印机，用 USB URI 里的厂商/型号拼出 **IEEE 1284 device-id**，
+  交给 `lpinfo -m --device-id` 由 CUPS 匹配 PPD（厂商与型号都要匹配，不会串厂商）；
+  仅当厂商是 HP 且 device-id 无结果时，才按型号做保守模糊匹配（镜像内置 HPLIP
+  PCL 驱动）；仍无结果才回落到通用 PCL，并在日志里提示。已有同名队列会跳过，
+  但仍会应用 `JUST_PRINT_USB_OPTIONS`。
 - 手动管理：进入容器后用 `lpadmin` / `lp` 自行管理。
+
+### 驱动是怎么选的（以及为什么无法全自动）
+
+CUPS 选择驱动只有两条正路：
+
+1. **IPP Everywhere / driverless**：打印机支持 IPP（含 IPP-over-USB）时用
+   `-m everywhere`，完全不需要厂商驱动，能力（含双面）由设备自己上报。
+   `JUST_PRINT_DISCOVER_IPP=1` 的局域网发现走的就是这条路。
+2. **传统 PPD**：老式 USB 打印机按 IEEE 1284 device-id 匹配 PPD。镜像里没有的
+   厂商专有驱动（联想、爱普生、佳能等）**无法凭空生成**，只能退到镜像自带的通用
+   PPD（PCL6 / PCL / PostScript），或用 `JUST_PRINT_USB_PPD` 指定厂商 PPD。
+
+所以“自动加载驱动”的边界是：**设备能自我描述（IPP）→ 全自动；只能给 1284
+device-id 且驱动不在镜像里 → 只能通用驱动或人工指定 PPD**。
+
+以联想 LJ4000D 为例（官方参数：PCL6 / BR-Script3，标配双面单元，Debian 无对应包）：
+
+```ini
+# 通用 PCL6 单色驱动 + 声明双面器已安装
+Environment=JUST_PRINT_USB_PPD=lsb/usr/cupsfilters/pxlmono.ppd
+Environment=JUST_PRINT_USB_OPTIONS=OptionDuplex=True
+```
+
+镜像自带的通用 PPD 可在容器内用 `lpinfo -m` 查看（如
+`lsb/usr/cupsfilters/pxlmono.ppd`、`lsb/usr/cupsfilters/pxlcolor.ppd`、
+`drv:///sample.drv/generpcl.ppd`）。
 
 ### USB 打印机与 PPD 选项
 
@@ -107,9 +135,11 @@ PPD 里双面受一个**可安装选项**（`Option1` / `OptionDuplex`，人类�
 （`ppdInstallableConflict`），于是只上报 `one-sided`——界面自然只有「单面」。
 硬件是否安装双面器无法从 USB 自动探测，因此需要部署者声明：
 
-- 镜像内置 **HPLIP PCL 驱动**（`printer-driver-hpcups`），HP LaserJet 4000 一类
-  机型的厂商 PPD 会参与型号匹配，且 HPLIP PPD 不把 Duplex 绑定到可安装选项，
-  通常装上就能直接上报双面。
+- 固件/驱动里声明的厂商与型号必须**同时**匹配才会选中该 PPD（CUPS 的
+  `lpinfo -m --device-id`），所以联想之类的机型不会被误配成 HP 驱动。
+- 镜像内置 **HPLIP PCL 驱动**（`printer-driver-hpcups`），HP 机型可按 1284
+  device-id 命中厂商 PPD；HPLIP 的 PPD 不把 Duplex 绑定到可安装选项，通常直接
+  就能上报双面。
 - 若某机型的 PPD 仍把双面绑定到可安装选项，用 `JUST_PRINT_USB_OPTIONS` 声明：
 
   ```ini
