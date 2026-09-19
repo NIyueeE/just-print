@@ -67,6 +67,9 @@ pub async fn upload(
         }
         let path = state.temp_dir.join(format!("{id}-upload.{extension}"));
         let size = write_field(&mut field, &path, state.config.max_upload_bytes).await?;
+        // 必须先释放当前 field（multer 在同一时刻只允许一个 field 持有状态锁），
+        // 否则后续 next_field() 会返回 "failed to lock multipart state"。
+        drop(field);
         pending = Some((name, path, size));
         // 读掉剩余的 multipart 部分，保持连接可复用。
         while multipart
@@ -222,7 +225,7 @@ fn map_multipart_error(error: &axum::extract::multipart::MultipartError) -> AppE
     if error.status() == StatusCode::PAYLOAD_TOO_LARGE {
         AppError::PayloadTooLarge
     } else {
-        AppError::BadRequest(format!("multipart 解析失败: {error}"))
+        AppError::BadRequest(format!("multipart 解析失败: {}", error.body_text()))
     }
 }
 

@@ -132,10 +132,9 @@ mod tests {
     }
 
     fn test_state(web_dir: std::path::PathBuf) -> Option<Arc<AppState>> {
-        let state = AppState::new(
-            test_config(web_dir),
-            std::env::temp_dir().join("just-print-test"),
-        );
+        let temp_dir = std::env::temp_dir().join("just-print-test");
+        let _ = std::fs::create_dir_all(&temp_dir);
+        let state = AppState::new(test_config(web_dir), temp_dir);
         state.ok().map(Arc::new)
     }
 
@@ -317,5 +316,46 @@ mod tests {
         let (status, body) = response_body(app, request).await;
         assert_eq!(status, StatusCode::OK);
         assert_eq!(body, "ok");
+    }
+
+    /// 回归：真实 multipart 正文必须能被解析（曾因未释放 field 导致
+    /// "failed to lock multipart state" 而误报 400）。
+    #[tokio::test]
+    async fn multipart_upload_body_is_parsed() {
+        let Some(state) = test_state(temp_web_dir()) else {
+            return;
+        };
+        let app = super::router(&state);
+        let payload = concat!(
+            "--probe\r\n",
+            "Content-Disposition: form-data; name=\"note\"\r\n\r\n",
+            "ignored\r\n",
+            "--probe\r\n",
+            "Content-Disposition: form-data; name=\"file\"; filename=\"sample.txt\"\r\n",
+            "Content-Type: text/plain\r\n\r\n",
+            "hello just-print\r\n",
+            "--probe--\r\n"
+        );
+        let request = Request::builder()
+            .uri("/api/files")
+            .method("POST")
+            .header(header::AUTHORIZATION, "Bearer test-token")
+            .header(header::CONTENT_TYPE, "multipart/form-data; boundary=probe")
+            .body(Body::from(payload));
+        let Ok(request) = request else {
+            return;
+        };
+        let (status, body) = response_body(app, request).await;
+        // 无 LibreOffice 时为 422 conversion_failed；有则为 201。
+        // 关键是 multipart 必须解析成功，而不是 400。
+        assert_ne!(
+            status,
+            StatusCode::BAD_REQUEST,
+            "multipart should parse: {body}"
+        );
+        assert!(
+            !body.contains("multipart 解析失败"),
+            "unexpected parse error: {body}"
+        );
     }
 }
