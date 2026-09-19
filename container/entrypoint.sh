@@ -85,6 +85,30 @@ is_hp_vendor() {
   esac
 }
 
+# 判断 `lpinfo -m` 的某一行是否真的属于该厂商/型号。
+# `lpinfo -m --device-id` 在部分 CUPS 版本上可能忽略过滤条件而返回完整列表，
+# 直接取第一行会选到无关驱动（例如把 Lenovo 选成 HPLIP 的 "Apollo 2100"），
+# 因此这里要求：厂商在 MakeModel 中作为独立词出现，且型号里的首段数字也出现。
+ppd_line_matches_device() {
+  _line="$1"
+  _vendor="$(printf '%s' "$2" | tr '[:upper:]' '[:lower:]' | tr -cd 'a-z0-9')"
+  _digits="$(printf '%s' "$3" | grep -o '[0-9][0-9]*' | head -n 1 || true)"
+  _mm="$(printf '%s' "$_line" | sed 's/^[^ ]* //' | tr '[:upper:]' '[:lower:]')"
+  _mm_words=" $(printf '%s' "$_mm" | tr -c 'a-z0-9' ' ' | tr -s ' ') "
+  [ -n "$_vendor" ] || return 1
+  case "$_mm_words" in
+    *" $_vendor "*) ;;
+    *) return 1 ;;
+  esac
+  if [ -n "$_digits" ]; then
+    case "$(printf '%s' "$_mm" | tr -cd '0-9 ')" in
+      *"$_digits"*) return 0 ;;
+      *) return 1 ;;
+    esac
+  fi
+  return 0
+}
+
 # 依据型号从 `lpinfo -m` 中做保守的模糊匹配（仅 HP）：
 # 依次尝试完整型号 → 前导 lj 还原为 laserjet → 去掉能力后缀的系列名，
 # 并优先厂商 PPD（避免落到 sample.drv 的通用驱动）。
@@ -190,7 +214,17 @@ auto_add_usb_printers() {
       matched=""
       device_id="$(usb_device_id "$mfg" "$mdl")"
       if [ -n "$device_id" ]; then
-        matched="$(lpinfo -m --device-id "$device_id" 2>/dev/null | head -n 1 | cut -d' ' -f1)"
+        candidates_file="$(mktemp)"
+        if lpinfo -m --device-id "$device_id" >"$candidates_file" 2>/dev/null; then
+          while IFS= read -r line; do
+            [ -n "$line" ] || continue
+            if ppd_line_matches_device "$line" "$mfg" "$mdl"; then
+              matched="$(printf '%s' "$line" | cut -d' ' -f1)"
+              break
+            fi
+          done < "$candidates_file"
+        fi
+        rm -f "$candidates_file"
       fi
       if [ -z "$matched" ] && is_hp_vendor "$mfg"; then
         matched="$(match_ppd "$model" "$ppd_list" || true)"

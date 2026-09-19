@@ -21,9 +21,10 @@ sed -n \
   -e '/^usb_mdl()/,/^}/p' \
   -e '/^usb_device_id()/,/^}/p' \
   -e '/^is_hp_vendor()/,/^}/p' \
+  -e '/^ppd_line_matches_device()/,/^}/p' \
   -e '/^match_ppd()/,/^}/p' \
   "$entrypoint" > "$funcs"
-for required in usb_device_id usb_mfg usb_mdl is_hp_vendor match_ppd; do
+for required in usb_device_id usb_mfg usb_mdl is_hp_vendor ppd_line_matches_device match_ppd; do
   if ! grep -q "^$required()" "$funcs"; then
     echo "error: failed to extract $required() from entrypoint.sh" >&2
     exit 1
@@ -76,6 +77,17 @@ expect_true is_hp_vendor HP
 expect_true is_hp_vendor hewlett-packard
 expect_false is_hp_vendor Lenovo
 expect_false is_hp_vendor Brother
+
+# 候选校验：拒绝与厂商/型号不符的 PPD（联想实机上曾误选 HPLIP 的 Apollo 2100）
+APOLLO='drv:///hpcups.drv/apollo-2100.ppd Apollo 2100, hpcups 3.22.10'
+HP4000='drv:///hpcups.drv/hp-laserjet_4000_series-pcl3.ppd HP LaserJet 4000 Series pcl3, hpcups 3.22.10'
+HP4014='drv:///hpcups.drv/hp-laserjet_p4014dn.ppd HP LaserJet p4014dn, hpcups 3.22.10'
+expect_false ppd_line_matches_device "$APOLLO" Lenovo LJ4000D
+expect_false ppd_line_matches_device "$HP4000" Lenovo LJ4000D
+expect_true ppd_line_matches_device "$HP4000" HP "LaserJet 4000"
+expect_true ppd_line_matches_device "$HP4014" HP p4014dn
+expect_false ppd_line_matches_device "$HP4014" HP "LaserJet 4000"
+expect_true ppd_line_matches_device "$APOLLO" Apollo "Apollo 2100"
 
 # 模糊匹配（仅 HP 路径）仍按型号+系列命中厂商 PPD，且不误配同数字的其它系列
 PPD_LIST='drv:///sample.drv/generpcl.ppd Generic PCL Laser Printer
