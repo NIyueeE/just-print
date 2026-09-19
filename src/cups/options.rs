@@ -172,6 +172,9 @@ pub fn parse_options(attributes: &IppAttributes) -> BTreeMap<String, OptionSpec>
 
 /// 把用户请求的字符串选项编码为 `Print-Job` 的 job 属性。
 ///
+/// 除标准 IPP 属性外，分辨率还会额外附带一个 CUPS PPD 兼容属性（见
+/// [`resolution_ppd_attribute`]）。
+///
 /// # Errors
 ///
 /// 选项不在目录中、取值不合法或 IPP 值编码失败时返回 [`OptionError`]。
@@ -186,8 +189,43 @@ pub fn encode_job_attributes(
             .ok_or_else(|| OptionError::Unknown(key.clone()))?;
         let value = encode_value(&spec.kind, key, raw)?;
         attributes.push(IppAttribute::with_name(key.as_str(), value)?);
+        if let Some(compat) = resolution_ppd_attribute(&spec.kind, raw) {
+            attributes.push(compat);
+        }
     }
     Ok(attributes)
+}
+
+/// CUPS PPD 队列的分辨率兼容属性。
+///
+/// CUPS 在 PPD 队列上把 IPP `printer-resolution` 交给 `cupsMarkOptions()`，
+/// 后者只用取值去匹配 PPD choice 名（`Resolution`/`SetResolution`/`JCLResolution`），
+/// 而 cupsd 自己序列化 IPP 分辨率时写的是 `1200x1200dpi`，PPD 里却是 `1200dpi`，
+/// 于是标准属性被静默忽略、分辨率退回 PPD 默认值。
+///
+/// 因此这里在标准属性之外再发一个同值的 PPD 风格属性 `Resolution`：
+/// PPD 队列凭 choice 名生效；没有该 PPD 选项的队列/打印机按未知属性忽略。
+fn resolution_ppd_attribute(kind: &OptionKind, raw: &str) -> Option<IppAttribute> {
+    let OptionKind::Resolution { values } = kind else {
+        return None;
+    };
+    let value = values.iter().find(|candidate| candidate.label == raw)?;
+    let name = ppd_resolution_choice(value);
+    IppAttribute::with_name("Resolution", IppValue::new_keyword(name.as_str()).ok()?).ok()
+}
+
+/// 把分辨率值写成 PPD choice 的常见形式：`1200dpi` 或 `600x1200dpi`。
+fn ppd_resolution_choice(value: &ResolutionValue) -> String {
+    // IPP 分辨率单位：3 = 每英寸点数，4 = 每厘米点数。
+    let unit = match value.units {
+        4 => "dpcm",
+        _ => "dpi",
+    };
+    if value.cross_feed == value.feed {
+        format!("{}{unit}", value.cross_feed)
+    } else {
+        format!("{}x{}{unit}", value.cross_feed, value.feed)
+    }
 }
 
 fn encode_value(kind: &OptionKind, key: &str, raw: &str) -> Result<IppValue, OptionError> {
@@ -527,7 +565,40 @@ mod tests {
         requested.insert("printer-resolution".to_string(), "600x600dpi".to_string());
         let result = encode_job_attributes(&catalog, &requested);
         assert!(result.is_ok());
-        assert_eq!(result.map_or(0, |items| items.len()), 4);
+        // 4 个标准属性 + 1 个 CUPS PPD 分辨率兼容属性。
+        assert_eq!(result.map_or(0, |items| items.len()), 5);
+    }
+
+    #[test]
+    fn adds_ppd_resolution_alias_for_cups_queues() {
+        let attributes = attrs(vec![(
+            "printer-resolution-supported",
+            IppValue::Array(vec![
+                IppValue::new_resolution(600, 600, 3),
+                IppValue::new_resolution(600, 1200, 3),
+                IppValue::new_resolution(47, 47, 4),
+            ]),
+        )]);
+        let catalog = parse_options(&attributes);
+
+        for (label, expected) in [
+            ("600x600dpi", "600dpi"),
+            ("600x1200dpi", "600x1200dpi"),
+            ("47x47dpcm", "47dpcm"),
+        ] {
+            let mut requested = BTreeMap::new();
+            requested.insert("printer-resolution".to_string(), label.to_string());
+            let Ok(encoded) = encode_job_attributes(&catalog, &requested) else {
+                return;
+            };
+            let alias = encoded
+                .iter()
+                .find(|item| item.name().as_ref() == "Resolution");
+            assert!(
+                matches!(alias.map(ipp::attribute::IppAttribute::value), Some(IppValue::Keyword(value)) if value.as_ref() == expected),
+                "分辨率 {label} 应附带 PPD 兼容属性 Resolution={expected}"
+            );
+        }
     }
 
     #[test]
