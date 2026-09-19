@@ -180,7 +180,7 @@ jobs:
             -H 'Authorization: Bearer ci-smoke-test' \
             "http://127.0.0.1:8080/api/files/$md_id")" = 204
       - name: Vulnerability scan (image)
-        uses: aquasecurity/trivy-action@0.28.0
+        uses: aquasecurity/trivy-action@v0.36.0
         with:
           image-ref: just-print:ci
           format: table
