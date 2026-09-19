@@ -1,6 +1,6 @@
 #!/bin/sh
-# 入口脚本纯逻辑的轻量测试：不启动 CUPS，只校验 USB URI 解析、device-id 拼装、
-# 厂商判定与 PPD 模糊匹配。由 `just shell` / CI 调用。
+# 入口脚本纯逻辑的轻量测试：不启动 CUPS，只校验 USB URI 解析、device-id 拼装与
+# 候选 PPD 校验。由 `just shell` / CI 调用。
 set -eu
 
 script_dir="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
@@ -20,11 +20,9 @@ sed -n \
   -e '/^usb_mfg()/,/^}/p' \
   -e '/^usb_mdl()/,/^}/p' \
   -e '/^usb_device_id()/,/^}/p' \
-  -e '/^is_hp_vendor()/,/^}/p' \
   -e '/^ppd_line_matches_device()/,/^}/p' \
-  -e '/^match_ppd()/,/^}/p' \
   "$entrypoint" > "$funcs"
-for required in usb_device_id usb_mfg usb_mdl is_hp_vendor ppd_line_matches_device match_ppd; do
+for required in usb_device_id usb_mfg usb_mdl ppd_line_matches_device; do
   if ! grep -q "^$required()" "$funcs"; then
     echo "error: failed to extract $required() from entrypoint.sh" >&2
     exit 1
@@ -72,12 +70,6 @@ expect "device-id（厂商+型号）" "$(usb_device_id Lenovo LJ4000D)" "MFG:Len
 expect "device-id（仅型号）" "$(usb_device_id "" LJ4000D)" "MDL:LJ4000D;"
 expect "device-id（都为空）" "$(usb_device_id "" "")" ""
 
-# 厂商判定：模糊匹配只允许 HP，联想必须走 device-id/通用驱动
-expect_true is_hp_vendor HP
-expect_true is_hp_vendor hewlett-packard
-expect_false is_hp_vendor Lenovo
-expect_false is_hp_vendor Brother
-
 # 候选校验：拒绝与厂商/型号不符的 PPD（联想实机上曾误选 HPLIP 的 Apollo 2100）
 APOLLO='drv:///hpcups.drv/apollo-2100.ppd Apollo 2100, hpcups 3.22.10'
 HP4000='drv:///hpcups.drv/hp-laserjet_4000_series-pcl3.ppd HP LaserJet 4000 Series pcl3, hpcups 3.22.10'
@@ -88,20 +80,6 @@ expect_true ppd_line_matches_device "$HP4000" HP "LaserJet 4000"
 expect_true ppd_line_matches_device "$HP4014" HP p4014dn
 expect_false ppd_line_matches_device "$HP4014" HP "LaserJet 4000"
 expect_true ppd_line_matches_device "$APOLLO" Apollo "Apollo 2100"
-
-# 模糊匹配（仅 HP 路径）仍按型号+系列命中厂商 PPD，且不误配同数字的其它系列
-PPD_LIST='drv:///sample.drv/generpcl.ppd Generic PCL Laser Printer
-drv:///sample.drv/laserjet.ppd HP LaserJet Series PCL 4/5
-drv:///hpcups.drv/hp-laserjet_4000_series-pcl3.ppd HP LaserJet 4000 Series pcl3, hpcups 3.22.10
-drv:///hpcups.drv/hp-officejet_4000_k210.ppd HP Officejet 4000 k210, hpcups 3.22.10
-drv:///hpcups.drv/hp-laserjet_p4014dn.ppd HP LaserJet p4014dn, hpcups 3.22.10'
-expect "匹配 lj4000d" "$(match_ppd lj4000d "$PPD_LIST")" \
-  "drv:///hpcups.drv/hp-laserjet_4000_series-pcl3.ppd"
-expect "匹配 p4014dn" "$(match_ppd p4014dn "$PPD_LIST")" \
-  "drv:///hpcups.drv/hp-laserjet_p4014dn.ppd"
-expect "未收录型号返回空" "$(match_ppd zzz9999 "$PPD_LIST")" ""
-expect "仅通用驱动时返回空" \
-  "$(match_ppd lj4000d 'drv:///sample.drv/generpcl.ppd Generic PCL Laser Printer')" ""
 
 # 选项解析：逗号与空格混用、空值
 JUST_PRINT_USB_OPTIONS='OptionDuplex=True,Option1=True'

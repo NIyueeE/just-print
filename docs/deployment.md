@@ -111,10 +111,11 @@ CUPS 在容器启动时由入口脚本拉起，打印机可以通过以下任一
   到容器内 `/var/spool/cups-pdf/<用户名>`，适合没有真实打印机的 WSL 环境。
 - USB 自动配置：默认开启（`JUST_PRINT_AUTO_USB=1`）。入口脚本启动时通过
   `lpinfo` 枚举 USB 打印机，用 USB URI 里的厂商/型号拼出 **IEEE 1284 device-id**，
-  交给 `lpinfo -m --device-id` 由 CUPS 匹配 PPD（厂商与型号都要匹配，不会串厂商）；
-  仅当厂商是 HP 且 device-id 无结果时，才按型号做保守模糊匹配（镜像内置 HPLIP
-  PCL 驱动）；仍无结果才回落到通用 PCL，并在日志里提示。已有同名队列会跳过，
-  但仍会应用 `JUST_PRINT_USB_OPTIONS`。
+  交给 `lpinfo -m --device-id` 取候选 PPD，再**逐行校验**候选是否真的属于该厂商/
+  型号（CUPS 的 device-id 过滤会把大量无关 PPD 一并返回，直接取第一行会选错驱动）；
+  没有可信候选就回落到通用 PCL，并在日志里提示。**不做任何"按型号猜驱动"的跨厂商
+  模糊匹配**（猜错会打出乱码），需要指定厂商驱动时用 `JUST_PRINT_USB_PPD`。
+  已有同名队列会跳过，但仍会应用 `JUST_PRINT_USB_OPTIONS`。
 - 手动管理：进入容器后用 `lpadmin` / `lp` 自行管理。
 
 ### 驱动是怎么选的（以及为什么无法全自动）

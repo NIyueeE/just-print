@@ -3,7 +3,7 @@
  *
  * 产品预设（有意保留，不改为“留空交给 CUPS”）：
  *   - `media` 优先 A4（值中含 `a4`，如 iso_a4_210x297mm）；
- *   - `sides` 优先双面长边（two-sided-long-edge / DuplexNoTumble 等）；
+ *   - `sides` 优先双面长边（two-sided-long-edge）；
  *   - `printer-resolution` 优先最高 DPI。
  * 其余选项回退到服务端 default，再回退到第一个合法值。
  * ========================================================================== */
@@ -44,9 +44,6 @@ const VALUE_LABELS: Record<string, Record<string, string>> = {
     'one-sided': '单面',
     'two-sided-long-edge': '双面（长边装订）',
     'two-sided-short-edge': '双面（短边装订）',
-    DuplexNoTumble: '双面（长边装订）',
-    DuplexTumble: '双面（短边装订）',
-    None: '单面',
   },
   'print-color-mode': {
     color: '彩色',
@@ -97,13 +94,7 @@ const UNIT_LABELS: Record<string, string> = {
 }
 
 const A4_PATTERN = /(^|[^a-z0-9])a4([^0-9]|$)/i
-const DUPLEX_LONG_EDGE = new Set([
-  'twosidedlongedge',
-  'duplexnotumble',
-  'longedge',
-  'duplexlongedge',
-  'longedgetwosided',
-])
+const DUPLEX_LONG_EDGE = new Set(['twosidedlongedge'])
 
 function normalizeToken(value: string): string {
   return value.toLowerCase().replace(/[^a-z0-9]/g, '')

@@ -77,14 +77,6 @@ usb_device_id() {
   printf '%s' "$_id"
 }
 
-# 厂商是否为 HP；模糊匹配只在 HP 上使用，避免把其它厂商的型号猜成 HP PPD。
-is_hp_vendor() {
-  case "$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]')" in
-    hp | hewlett-packard | hewlett*) return 0 ;;
-    *) return 1 ;;
-  esac
-}
-
 # 判断 `lpinfo -m` 的某一行是否真的属于该厂商/型号。
 # `lpinfo -m --device-id` 在部分 CUPS 版本上可能忽略过滤条件而返回完整列表，
 # 直接取第一行会选到无关驱动（例如把 Lenovo 选成 HPLIP 的 "Apollo 2100"），
@@ -109,48 +101,16 @@ ppd_line_matches_device() {
   return 0
 }
 
-# 依据型号从 `lpinfo -m` 中做保守的模糊匹配（仅 HP）：
-# 依次尝试完整型号 → 前导 lj 还原为 laserjet → 去掉能力后缀的系列名，
-# 并优先厂商 PPD（避免落到 sample.drv 的通用驱动）。
-match_ppd() {
-  _model="$1"
-  _list="$2"
-  _base="$_model"
-  case "$_base" in
-    lj*) _base="laserjet${_base#lj}" ;;
-  esac
-  _series="$(printf '%s' "$_base" | sed -E 's/([0-9]+)[a-z]+$/\1/')"
-  for _candidate in "$_model" "$_base" "$_series"; do
-    [ -n "$_candidate" ] || continue
-    # 纯数字的系列名过于宽泛，容易误配，直接跳过。
-    case "$_candidate" in
-      *[a-z]*) ;;
-      *) continue ;;
-    esac
-    _pattern="$(printf '%s' "$_candidate" \
-      | sed -E -e 's/[^a-z0-9]+/@/g' -e 's/([a-z])([0-9])/\1@\2/g' -e 's/([0-9])([a-z])/\1@\2/g' \
-      | sed 's/@/[-_ ]?/g')"
-    _match="$(printf '%s\n' "$_list" | grep -iE "$_pattern" | grep -v 'sample\.drv' | head -n 1 || true)"
-    if [ -z "$_match" ]; then
-      _match="$(printf '%s\n' "$_list" | grep -iE "$_pattern" | head -n 1 || true)"
-    fi
-    if [ -n "$_match" ]; then
-      printf '%s' "${_match%% *}"
-      return 0
-    fi
-  done
-  return 1
-}
-
 # 自动添加 USB 打印机队列（默认开启；JUST_PRINT_AUTO_USB=0 关闭）。
 # 需要容器映射 /dev/bus/usb 供 lpinfo 枚举。
 #
-# 驱动选择顺序（与 CUPS 的标准流程一致）：
-#   1) 用 USB URI 里的厂商/型号拼出 1284 device-id，交给 `lpinfo -m --device-id`
-#      由 CUPS 匹配带 1284DeviceID 的 PPD（厂商+型号都要匹配，不会串厂商）；
-#   2) 仍无结果且厂商是 HP 时，才用型号做保守模糊匹配（覆盖设备上报 MFG:HP、
-#      而 PPD 写 MFG:Hewlett-Packard 这类对不上的情况）；
-#   3) 最后回落到通用 PCL PPD，并提示可用 JUST_PRINT_USB_PPD 固定驱动。
+# 驱动选择顺序：
+#   1) 用 USB URI 里的厂商/型号拼出 1284 device-id 交给 `lpinfo -m --device-id`，
+#      再逐行校验候选是否真的属于该厂商/型号——CUPS 的 device-id 过滤并不可靠，
+#      会把大量无关 PPD（甚至标签机）一并返回；
+#   2) 没有可信候选就回落到通用 PCL PPD，并提示可用 JUST_PRINT_USB_PPD 固定驱动。
+# 这里不做任何"按型号猜驱动"的模糊匹配：跨厂商猜错会直接打出乱码，
+# 宁可退回通用驱动；显式指定驱动的能力由 JUST_PRINT_USB_PPD 提供。
 # `JUST_PRINT_USB_OPTIONS` 用于声明硬件相关的 PPD 选项（如双面器
 # OptionDuplex=True / Option1=True）。
 auto_add_usb_printers() {
@@ -163,7 +123,6 @@ auto_add_usb_printers() {
     return 0
   fi
 
-  ppd_list="$(lpinfo -m 2>/dev/null || true)"
   generic_ppd="drv:///sample.drv/generpcl.ppd"
   extra_options="$(usb_extra_options)"
 
@@ -198,10 +157,10 @@ auto_add_usb_printers() {
           esac
         done
         if [ "$#" -gt 2 ]; then
-          if lpadmin "$@" >/dev/null 2>&1; then
-            echo "updated USB printer options: $name"
+          if ! update_error="$(lpadmin "$@" 2>&1)"; then
+            echo "warning: failed to update options for USB printer $name: $update_error" >&2
           else
-            echo "warning: failed to update options for USB printer $name" >&2
+            echo "updated USB printer options: $name"
           fi
         fi
       fi
@@ -226,9 +185,6 @@ auto_add_usb_printers() {
         fi
         rm -f "$candidates_file"
       fi
-      if [ -z "$matched" ] && is_hp_vendor "$mfg"; then
-        matched="$(match_ppd "$model" "$ppd_list" || true)"
-      fi
       if [ -n "$matched" ]; then
         ppd="$matched"
       else
@@ -248,7 +204,10 @@ auto_add_usb_printers() {
         *) echo "warning: 忽略非法的 JUST_PRINT_USB_OPTIONS 项: $opt" >&2 ;;
       esac
     done
-    if lpadmin "$@" >/dev/null 2>&1; then
+    # 依次尝试：带选项 → 不带选项 → 通用 PPD。中间失败不刷屏，
+    # 但保留最后一次的错误，全部失败时一并打印（例如选项名写错时能直接看到原因）。
+    last_error=""
+    if last_error="$(lpadmin "$@" 2>&1)"; then
       echo "auto-added USB printer: $name ($uri, $ppd)"
       continue
     fi
@@ -257,7 +216,7 @@ auto_add_usb_printers() {
       # 导致整台打印机都建不出来。
       echo "warning: lpadmin 拒绝 JUST_PRINT_USB_OPTIONS，改为不带选项重试 $name" >&2
       set -- -p "$name" -E -v "$uri" -m "$ppd"
-      if lpadmin "$@" >/dev/null 2>&1; then
+      if last_error="$(lpadmin "$@" 2>&1)"; then
         echo "auto-added USB printer (without options): $name ($uri, $ppd)"
         continue
       fi
@@ -266,12 +225,12 @@ auto_add_usb_printers() {
       # PPD 不可用（例如 JUST_PRINT_USB_PPD 写错）时回落到通用 PPD。
       echo "warning: PPD $ppd 不可用，回落到通用 PPD $generic_ppd" >&2
       set -- -p "$name" -E -v "$uri" -m "$generic_ppd"
-      if lpadmin "$@" >/dev/null 2>&1; then
+      if last_error="$(lpadmin "$@" 2>&1)"; then
         echo "auto-added USB printer (generic PPD): $name ($uri, $generic_ppd)"
         continue
       fi
     fi
-    echo "warning: failed to auto-add USB printer $name ($uri, $ppd)" >&2
+    echo "warning: failed to auto-add USB printer $name ($uri, $ppd): $last_error" >&2
   done
 }
 

@@ -32,10 +32,9 @@ describe('A4 / 双面长边 识别', () => {
     expect(isA4Value('a400')).toBe(false)
   })
 
-  it('normalizes duplex long-edge spellings', () => {
+  it('matches the IPP duplex long-edge keyword', () => {
     expect(isDuplexLongEdgeValue('two-sided-long-edge')).toBe(true)
-    expect(isDuplexLongEdgeValue('DuplexNoTumble')).toBe(true)
-    expect(isDuplexLongEdgeValue('long-edge')).toBe(true)
+    expect(isDuplexLongEdgeValue('two_sided_long_edge')).toBe(true)
     expect(isDuplexLongEdgeValue('two-sided-short-edge')).toBe(false)
     expect(isDuplexLongEdgeValue('one-sided')).toBe(false)
   })
