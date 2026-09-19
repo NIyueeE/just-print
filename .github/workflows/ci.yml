@@ -24,6 +24,15 @@ jobs:
       - name: Run full check chain
         run: just check
 
+  audit:
+    name: Dependency audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: rustsec/audit-check@v2
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
   image:
     name: Build image and smoke test
     runs-on: ubuntu-latest
@@ -41,7 +50,7 @@ jobs:
           tags: just-print:ci
           cache-from: type=gha
           cache-to: type=gha,mode=max
-      - name: Smoke test (health, frontend, LibreOffice, CUPS-PDF end-to-end)
+      - name: Smoke test (health, readiness, frontend, LibreOffice, CUPS-PDF end-to-end)
         run: |
           set -euo pipefail
           cid="$(docker run -d --rm -p 127.0.0.1:8080:8080 \
@@ -49,13 +58,21 @@ jobs:
             -e JUST_PRINT_CUPS_PDF=1 \
             just-print:ci)"
           trap 'docker rm -f "$cid" >/dev/null 2>&1 || true' EXIT
-          for _ in $(seq 1 30); do
+          for _ in $(seq 1 60); do
             if curl -fsS http://127.0.0.1:8080/healthz >/dev/null; then
               break
             fi
             sleep 1
           done
           curl -fsS http://127.0.0.1:8080/healthz >/dev/null
+          # 就绪探针会真实查询 CUPS
+          for _ in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:8080/readyz >/dev/null; then
+              break
+            fi
+            sleep 1
+          done
+          curl -fsS http://127.0.0.1:8080/readyz >/dev/null
           curl -fsS http://127.0.0.1:8080/ | grep -q '<div id="app">'
           docker exec "$cid" soffice --version
           docker exec "$cid" gs --version
@@ -74,6 +91,10 @@ jobs:
             -H 'Authorization: Bearer ci-smoke-test' \
             -F 'file=@/dev/null;filename=empty.txt' \
             http://127.0.0.1:8080/api/files)" = 400
+          # 格式清单是前后端单一来源
+          formats_json="$(curl -fsS -H 'Authorization: Bearer ci-smoke-test' http://127.0.0.1:8080/api/formats)"
+          printf '%s' "$formats_json" | grep -q '"extensions"'
+          printf '%s' "$formats_json" | grep -q '"pdf"'
           # 打印机列表应包含入口脚本配置的 CUPS-PDF
           printers_json="$(curl -s -H 'Authorization: Bearer ci-smoke-test' http://127.0.0.1:8080/api/printers)"
           printf '%s' "$printers_json" | grep -q '"id":"CUPS-PDF"'
@@ -130,6 +151,43 @@ jobs:
             -H 'Authorization: Bearer ci-smoke-test' -H 'Content-Type: application/json' \
             -d "{\"file_id\":\"$file_id\",\"printer_id\":\"CUPS-PDF\",\"options\":{\"DefinitelyNotAnOption\":\"x\"}}" \
             http://127.0.0.1:8080/api/print)" = 400
+          # 幂等：同一 Idempotency-Key 重复提交返回同一任务，第二次标记为回放
+          key="smoke-idem-1"
+          body="{\"file_id\":\"$file_id\",\"printer_id\":\"CUPS-PDF\",\"options\":{}}"
+          first="$(curl -s -H 'Authorization: Bearer ci-smoke-test' \
+            -H 'Content-Type: application/json' -H "Idempotency-Key: $key" \
+            -d "$body" http://127.0.0.1:8080/api/print)"
+          second="$(curl -s -D /tmp/idem-headers -H 'Authorization: Bearer ci-smoke-test' \
+            -H 'Content-Type: application/json' -H "Idempotency-Key: $key" \
+            -d "$body" http://127.0.0.1:8080/api/print)"
+          first_id="$(printf '%s' "$first" | sed -n 's/.*"job_id":"\([^"]*\)".*/\1/p')"
+          second_id="$(printf '%s' "$second" | sed -n 's/.*"job_id":"\([^"]*\)".*/\1/p')"
+          test -n "$first_id"
+          test "$first_id" = "$second_id"
+          grep -qi 'idempotency-replayed: true' /tmp/idem-headers
+          # 任务列表与取消端点可用（取消可能因任务已完成而返回 404/409）
+          curl -fsS -H 'Authorization: Bearer ci-smoke-test' \
+            'http://127.0.0.1:8080/api/jobs?limit=5' | grep -q '"jobs"'
+          cancel_status="$(curl -s -o /dev/null -w '%{http_code}' -X DELETE \
+            -H 'Authorization: Bearer ci-smoke-test' \
+            "http://127.0.0.1:8080/api/jobs/$first_id")"
+          case "$cancel_status" in
+            204|404|409) ;;
+            *) echo "unexpected cancel status: $cancel_status"; exit 1 ;;
+          esac
+          # 删除上传文件
+          test "$(curl -s -o /dev/null -w '%{http_code}' -X DELETE \
+            -H 'Authorization: Bearer ci-smoke-test' \
+            "http://127.0.0.1:8080/api/files/$md_id")" = 204
+      - name: Vulnerability scan (image)
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          image-ref: just-print:ci
+          format: table
+          exit-code: "1"
+          ignore-unfixed: true
+          severity: HIGH,CRITICAL
+          scanners: vuln
 
   compose:
     name: Validate compose example

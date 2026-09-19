@@ -54,13 +54,25 @@ sudo systemctl enable --now just-print.service
 | 变量 | 默认值 | 说明 |
 | --- | --- | --- |
 | `JUST_PRINT_TOKEN` | 无 | 准入令牌，建议 32 字节以上随机值；未配置或为空时服务拒绝启动（fail-closed） |
-| `JUST_PRINT_ADDR` | `0.0.0.0:8080` | 后端监听地址；容器内直接对外监听，TLS 由云负载均衡 / Ingress / 反向代理终结 |
-| `JUST_PRINT_WEB_DIR` | `/usr/share/just-print/web` | 前端静态文件目录（镜像内已内置，一般无需修改） |
-| `JUST_PRINT_CUPS_URI` | `http://127.0.0.1:631` | 容器内 CUPS 服务地址；一般无需修改 |
-| `JUST_PRINT_CUPS_PDF` | `0` | 设为 `1` 时入口脚本自动添加 `CUPS-PDF` 调试打印机（cups-pdf，无真实打印机环境验证用） |
-| `JUST_PRINT_DISCOVER_IPP` | `0` | 设为 `1` 时启动 mDNS/Avahi，并用 `ippfind` 自动添加局域网 IPP Everywhere 打印机 |
-| `JUST_PRINT_AUTO_USB` | `1` | 启动时自动枚举 USB 打印机并创建 CUPS 队列；设为 `0` 关闭 |
-| `JUST_PRINT_USB_PPD` | 空 | 自动添加 USB 打印机时固定的 PPD；留空按型号匹配，找不到用通用 PCL |
+| `JUST_PRINT_ADDR` | `0.0.0.0:8080` | 后端监听地址；TLS 由云负载均衡 / Ingress / 反向代理终结 |
+| `JUST_PRINT_WEB_DIR` | `/usr/share/just-print/web` | 前端静态文件目录（镜像内已内置） |
+| `JUST_PRINT_CUPS_URI` | `http://127.0.0.1:631` | CUPS 地址；`https://` 会使用 IPPS |
+| `JUST_PRINT_CUPS_PDF` | `0` | 设为 `1` 时入口脚本添加 `CUPS-PDF` 调试打印机 |
+| `JUST_PRINT_DISCOVER_IPP` | `0` | 设为 `1` 时启动 mDNS/Avahi 并用 `ippfind` 自动添加 IPP Everywhere 打印机 |
+| `JUST_PRINT_AUTO_USB` | `1` | 启动时自动枚举 USB 打印机并创建 CUPS 队列 |
+| `JUST_PRINT_USB_PPD` | 空 | 自动添加 USB 打印机时固定的 PPD |
+| `JUST_PRINT_MAX_UPLOAD_BYTES` | `67108864` | 单文件上传上限（字节，默认 64 MiB） |
+| `JUST_PRINT_UPLOAD_SLOTS` | `4` | 并发上传上限 |
+| `JUST_PRINT_CONVERSION_SLOTS` | `2` | 并发 LibreOffice 转换上限 |
+| `JUST_PRINT_CONVERSION_TIMEOUT_SECS` | `120` | 单次转换超时（秒） |
+| `JUST_PRINT_TEMP_TTL_SECS` | `1800` | 无引用临时文件保留时长（秒） |
+| `JUST_PRINT_CLEANUP_INTERVAL_SECS` | `60` | 后台清理周期（秒） |
+| `JUST_PRINT_IPP_TIMEOUT_SECS` | `15` | 单次 IPP 请求超时（秒） |
+| `JUST_PRINT_PRINTER_CACHE_SECS` | `10` | 打印机快照缓存时长（秒） |
+| `JUST_PRINT_JOB_CACHE_SECS` | `2` | 任务状态缓存时长（秒） |
+| `JUST_PRINT_IDEMPOTENCY_TTL_SECS` | `600` | 幂等键保留时长（秒） |
+| `JUST_PRINT_REQUEST_TIMEOUT_SECS` | `300` | 单个 HTTP 请求处理超时（秒） |
+| `RUST_LOG` | `info` | tracing 日志过滤（如 `just_print=debug`） |
 
 ## 打印机配置
 
@@ -77,8 +89,16 @@ CUPS 在容器启动时由入口脚本拉起，打印机可以通过以下任一
   队列；已有同名队列会跳过。
 - 手动管理：进入容器后用 `lpadmin` / `lp` 自行管理。
 
-只有 CUPS 中可见的打印机会出现在 `/api/printers`；前端控制项来自 `lpoptions -l`
-与 IPP 属性，而不是 PJL 能力查询。
+只有 CUPS 中可见的打印机会出现在 `/api/printers`；前端控制项直接来自 IPP 的
+`*-supported` / `*-default` 打印机属性，而不是 PPD / `lpoptions` 名称或 PJL 能力查询。
+
+## 可观测性
+
+- `GET /healthz`：进程存活探针，容器 `HEALTHCHECK` 使用。
+- `GET /readyz`：就绪探针，会真实查询 CUPS；适合作为 Ingress/K8s readiness。
+- `GET /api/metrics`：Prometheus 文本指标（需要 Bearer 令牌，抓取端配置
+  `authorization: { credentials: <token> }` 即可）。
+- 日志为 `tracing` 结构化输出，每个请求带 `request_id`；打印提交会写审计日志。
 
 ## TLS 与访问控制
 

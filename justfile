@@ -11,10 +11,18 @@ backend:
     cargo clippy --all-targets --all-features -- -D warnings
     cargo test --all-features
 
-# 前端完整检查链：依赖校验、类型检查、生产构建
+# 前端完整检查链：依赖校验、类型检查、lint、测试、生产构建
 frontend:
     cd frontend && bun install --frozen-lockfile
+    cd frontend && bun run typecheck
+    cd frontend && bun run lint
+    cd frontend && bun run test:run
     cd frontend && bun run build
+
+# 依赖安全审计（需要 cargo-audit 与 bun）
+audit:
+    cargo audit
+    cd frontend && bun audit
 
 # 构建容器镜像（自动选择 podman 或 docker）
 container:

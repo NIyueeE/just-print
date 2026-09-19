@@ -27,6 +27,19 @@ services:
       JUST_PRINT_USB_PPD: "${JUST_PRINT_USB_PPD:-}"
     # 转换产生的临时文件放在内存文件系统，容器重启即清空。
     tmpfs: /tmp
+    # LibreOffice 对 /dev/shm 有依赖，默认 64MiB 在转换大文档时可能不足。
+    shm_size: "256m"
+    # 基础加固：禁止提权；限制进程数/内存，避免 LibreOffice 异常时拖垮宿主机。
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 512
+    mem_limit: "2g"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:8080/readyz >/dev/null"]
+      interval: 30s
+      timeout: 5s
+      start_period: 30s
+      retries: 3
     # 可选：持久化 CUPS spool 与 cups-pdf 输出（命名卷在下方声明）。
     # volumes:
     #   - just-print-cups:/var/spool/cups

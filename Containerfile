@@ -50,7 +50,8 @@ ENV JUST_PRINT_WEB_DIR=/usr/share/just-print/web
 ENV JUST_PRINT_CUPS_URI=http://127.0.0.1:631
 EXPOSE 8080
 
-HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
-    CMD sh -c 'curl -fsS http://127.0.0.1:8080/healthz >/dev/null && lpstat -r 2>/dev/null | grep -q "scheduler is running"'
+# 就绪探针 /readyz 会真实查询 CUPS；CUPS 不可用时容器标记为 unhealthy。
+HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \
+    CMD sh -c 'curl -fsS http://127.0.0.1:8080/readyz >/dev/null'
 
 ENTRYPOINT ["/usr/local/bin/just-print-entrypoint"]

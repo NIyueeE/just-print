@@ -29,6 +29,12 @@ Environment=JUST_PRINT_AUTO_USB=1
 # Environment=JUST_PRINT_USB_PPD=drv:///sample.drv/generpcl.ppd
 EnvironmentFile=/etc/just-print/just-print.env
 Tmpfs=/tmp
+# LibreOffice 对 /dev/shm 有依赖，默认 64MiB 在转换大文档时可能不足。
+ShmSize=256m
+# 基础加固：禁止提权；限制进程数/内存。
+NoNewPrivileges=true
+PidsLimit=512
+Memory=2g
 # 可选：持久化 CUPS spool 与 cups-pdf 输出。
 # Volume=just-print-cups:/var/spool/cups
 # Volume=just-print-cups-pdf:/var/spool/cups-pdf
