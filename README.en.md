@@ -13,8 +13,10 @@ Docker and Podman.
 
 - Single image delivery: backend, frontend, CUPS, LibreOffice and fonts in one.
 - All 172 LibreOffice-readable formats are converted to PDF with online preview.
-- Printers, queues and job states are managed by CUPS; USB printers can be
-  auto-queued and the frontend shows common controls.
+- Printers, queues and job states are managed by CUPS; USB printers are
+  auto-queued with model-matched vendor PPDs (HPLIP PCL driver bundled), and
+  `JUST_PRINT_USB_OPTIONS` lets you declare installable hardware such as a
+  duplexer.
 - The backend talks to CUPS over standard IPP/HTTP with no per-request
   subprocesses, and caches printer/job snapshots with a short TTL.
 - `POST /api/print` honours the standard `Idempotency-Key` header, so retries do

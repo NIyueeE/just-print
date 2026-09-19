@@ -60,7 +60,8 @@ sudo systemctl enable --now just-print.service
 | `JUST_PRINT_CUPS_PDF` | `0` | 设为 `1` 时入口脚本添加 `CUPS-PDF` 调试打印机 |
 | `JUST_PRINT_DISCOVER_IPP` | `0` | 设为 `1` 时启动 mDNS/Avahi 并用 `ippfind` 自动添加 IPP Everywhere 打印机 |
 | `JUST_PRINT_AUTO_USB` | `1` | 启动时自动枚举 USB 打印机并创建 CUPS 队列 |
-| `JUST_PRINT_USB_PPD` | 空 | 自动添加 USB 打印机时固定的 PPD |
+| `JUST_PRINT_USB_PPD` | 空 | 自动添加 USB 打印机时固定的 PPD；留空按型号匹配（镜像内置 HPLIP PCL 驱动） |
+| `JUST_PRINT_USB_OPTIONS` | 空 | USB 队列的额外 PPD 选项（逗号或空格分隔的 `key=value`），用于声明硬件事实，如双面器 `Option1=True` |
 | `JUST_PRINT_MAX_UPLOAD_BYTES` | `67108864` | 单文件上传上限（字节，默认 64 MiB） |
 | `JUST_PRINT_UPLOAD_SLOTS` | `4` | 并发上传上限 |
 | `JUST_PRINT_CONVERSION_SLOTS` | `2` | 并发 LibreOffice 转换上限 |
@@ -85,9 +86,41 @@ CUPS 在容器启动时由入口脚本拉起，打印机可以通过以下任一
 - 调试：`JUST_PRINT_CUPS_PDF=1` 时入口脚本自动添加 `CUPS-PDF` 打印机，输出 PDF
   到容器内 `/var/spool/cups-pdf/<用户名>`，适合没有真实打印机的 WSL 环境。
 - USB 自动配置：默认开启（`JUST_PRINT_AUTO_USB=1`）。入口脚本启动时通过
-  `lpinfo` 枚举 USB 打印机，按型号匹配 PPD（找不到用通用 PCL），并自动创建
-  队列；已有同名队列会跳过。
+  `lpinfo` 枚举 USB 打印机，优先按型号匹配厂商 PPD（镜像内置 HPLIP PCL 驱动，
+  见下节），找不到才用通用 PCL；已有同名队列会跳过（但仍会应用
+  `JUST_PRINT_USB_OPTIONS`）。
 - 手动管理：进入容器后用 `lpadmin` / `lp` 自行管理。
+
+### USB 打印机与 PPD 选项
+
+`lpoptions -p <队列> -l` 列出的是 PPD 的全部选项，但 **`GET /api/printers` 返回的是
+CUPS 通过 IPP 上报的能力，两者可能不一致**。典型例子是双面打印：
+
+```text
+$ lpoptions -p MFG-MODEL -l
+Duplex/2-Sided Printing: *None DuplexNoTumble DuplexTumble
+Option1/Duplexer: *False True
+```
+
+PPD 里双面受一个**可安装选项**（`Option1` / `OptionDuplex`，人类名 “Duplexer”）
+约束；如果它默认 `False`，CUPS 生成 `sides-supported` 时会检测到冲突
+（`ppdInstallableConflict`），于是只上报 `one-sided`——界面自然只有「单面」。
+硬件是否安装双面器无法从 USB 自动探测，因此需要部署者声明：
+
+- 镜像内置 **HPLIP PCL 驱动**（`printer-driver-hpcups`），HP LaserJet 4000 一类
+  机型的厂商 PPD 会参与型号匹配，且 HPLIP PPD 不把 Duplex 绑定到可安装选项，
+  通常装上就能直接上报双面。
+- 若某机型的 PPD 仍把双面绑定到可安装选项，用 `JUST_PRINT_USB_OPTIONS` 声明：
+
+  ```ini
+  Environment=JUST_PRINT_USB_OPTIONS=Option1=True
+  ```
+
+  通用 PCL PPD 的选项名通常是 `Option1`，HPLIP PPD 是 `OptionDuplex`；多个选项用
+  逗号分隔。可以在容器内 `grep -iE 'Installable|UIConstraints' /etc/cups/ppd/<队列>.ppd`
+  确认实际选项名。
+- 想完全固定驱动，用 `JUST_PRINT_USB_PPD`（驱动 URI 或 PPD 文件路径）。
+- 改完在界面点「刷新」（或请求 `GET /api/printers?refresh=true`）即可看到新能力。
 
 只有 CUPS 中可见的打印机会出现在 `/api/printers`；前端控制项直接来自 IPP 的
 `*-supported` / `*-default` 打印机属性，而不是 PPD / `lpoptions` 名称或 PJL 能力查询。

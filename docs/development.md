@@ -10,6 +10,7 @@
 | `just` / `just check` | 后端 + 前端完整检查 |
 | `just backend` | 格式检查（fmt）+ 静态检查（clippy）+ 测试 |
 | `just frontend` | 依赖校验（frozen-lockfile）+ 类型检查 + lint + 单元测试 + 生产构建 |
+| `just shell` | 入口脚本语法检查 + PPD 匹配/选项解析的纯逻辑测试 |
 | `just container` | 用 podman 或 docker 构建本地镜像 |
 | `just debug` | 构建并以 `JUST_PRINT_CUPS_PDF=1` 前台运行调试容器（需先设置 `JUST_PRINT_TOKEN`） |
 | `cd frontend && bun run dev` | 启动 Vite 开发服务器 |

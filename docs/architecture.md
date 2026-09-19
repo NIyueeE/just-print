@@ -67,6 +67,9 @@ just-print/
   不使用 PPD / `lpoptions` 名称。
 - 打印机快照带 10 秒 TTL 缓存 + singleflight 刷新；任务状态带 2 秒 TTL 缓存。
   前端轮询因此不会放大成 CUPS 请求风暴。
+- 队列由入口脚本创建：镜像内置 HPLIP PCL 驱动（`printer-driver-hpcups`），USB
+  打印机按型号优先匹配厂商 PPD，找不到才回落到通用 PCL；硬件相关的可安装选项
+  （如双面器）由 `JUST_PRINT_USB_OPTIONS` 声明，能力仍以 CUPS 上报的 IPP 属性为准。
 - IPP 层的超时、连接与协议错误被映射为 `503 service_unavailable` /
   `504 gateway_timeout` / `502 bad_gateway`，而不是笼统的 500。
 

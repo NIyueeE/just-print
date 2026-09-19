@@ -11,7 +11,7 @@ LibreOffice 与字体，上传的文档统一转换为 PDF 后交给 CUPS 打印
 
 - 单镜像交付：后端、前端、CUPS、LibreOffice 与字体一体。
 - 172 种 LibreOffice 可读格式统一转 PDF，并提供在线预览。
-- 打印机、队列与任务状态由 CUPS 管理；USB 打印机可自动建队列，前端展示常见控制项。
+- 打印机、队列与任务状态由 CUPS 管理；USB 打印机自动建队列并优先匹配厂商 PPD（内置 HPLIP PCL 驱动），可用 `JUST_PRINT_USB_OPTIONS` 声明双面器等硬件选项。
 - 后端通过标准 IPP over HTTP 直接与 CUPS 通信，无逐请求子进程开销；打印机与任务状态带短 TTL 缓存。
 - 打印提交支持标准 `Idempotency-Key`：重试不会重复出纸，并可在响应丢失后按 `job-name` 对账找回任务。
 - 任务列表、状态查询与取消接口；上传、预览与失败重打的完整闭环。

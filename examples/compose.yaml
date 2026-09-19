@@ -25,6 +25,8 @@ services:
       JUST_PRINT_AUTO_USB: "${JUST_PRINT_AUTO_USB:-1}"
       # 可选：固定自动添加 USB 打印机使用的 PPD；留空按型号匹配，找不到用通用 PCL。
       JUST_PRINT_USB_PPD: "${JUST_PRINT_USB_PPD:-}"
+      # 可选：USB 队列的 PPD 选项（逗号分隔 key=value），如声明双面器 Option1=True。
+      JUST_PRINT_USB_OPTIONS: "${JUST_PRINT_USB_OPTIONS:-}"
     # 转换产生的临时文件放在内存文件系统，容器重启即清空。
     tmpfs: /tmp
     # LibreOffice 对 /dev/shm 有依赖，默认 64MiB 在转换大文档时可能不足。
