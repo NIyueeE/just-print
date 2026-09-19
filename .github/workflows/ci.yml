@@ -57,7 +57,12 @@ jobs:
             -e JUST_PRINT_TOKEN=ci-smoke-test \
             -e JUST_PRINT_CUPS_PDF=1 \
             just-print:ci)"
+          dump_logs() { echo "=== SMOKE FAILED: container logs (tail 150) ==="; docker logs "$cid" 2>&1 | tail -150 || true; }
+          trap 'dump_logs' ERR
           trap 'docker rm -f "$cid" >/dev/null 2>&1 || true' EXIT
+          step() { echo "==> $*"; }
+
+          step "wait for /healthz"
           for _ in $(seq 1 60); do
             if curl -fsS http://127.0.0.1:8080/healthz >/dev/null; then
               break
@@ -65,7 +70,8 @@ jobs:
             sleep 1
           done
           curl -fsS http://127.0.0.1:8080/healthz >/dev/null
-          # 就绪探针会真实查询 CUPS
+
+          step "readiness (/readyz queries CUPS)"
           for _ in $(seq 1 30); do
             if curl -fsS http://127.0.0.1:8080/readyz >/dev/null; then
               break
@@ -73,48 +79,67 @@ jobs:
             sleep 1
           done
           curl -fsS http://127.0.0.1:8080/readyz >/dev/null
+
+          step "static frontend"
           curl -fsS http://127.0.0.1:8080/ | grep -q '<div id="app">'
+
+          step "toolchain and CUPS-PDF"
           docker exec "$cid" soffice --version
           docker exec "$cid" gs --version
           docker exec "$cid" lpstat -r | grep -q 'scheduler is running'
           docker exec "$cid" lpstat -p CUPS-PDF | grep -q 'CUPS-PDF'
+
+          step "conversions (text + emoji font)"
           docker exec -w /tmp "$cid" sh -c \
             'printf "hello" > sample.txt && soffice --headless --convert-to pdf --outdir /tmp /tmp/sample.txt >/dev/null && test -s /tmp/sample.pdf'
-          # Emoji 应通过 Symbola 渲染并嵌入 PDF（PDF 对象流是压缩的，需用 pdffonts 检查）
           docker exec -w /tmp "$cid" sh -c \
             'printf "emoji: 😀 🎉 👍 ❤️ ☀️" > /tmp/ci-emoji.txt && soffice --headless --convert-to pdf --outdir /tmp /tmp/ci-emoji.txt >/dev/null && pdffonts /tmp/ci-emoji.pdf | grep -qi symbola'
 
-          # API 冒烟：未带令牌必须 401
+          step "auth: /api without token -> 401"
           test "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8080/api/printers)" = 401
-          # 空文件上传应返回 400
+
+          step "upload: empty file -> 400"
           test "$(curl -s -o /dev/null -w '%{http_code}' \
             -H 'Authorization: Bearer ci-smoke-test' \
             -F 'file=@/dev/null;filename=empty.txt' \
             http://127.0.0.1:8080/api/files)" = 400
-          # 格式清单是前后端单一来源
+
+          step "formats"
           formats_json="$(curl -fsS -H 'Authorization: Bearer ci-smoke-test' http://127.0.0.1:8080/api/formats)"
           printf '%s' "$formats_json" | grep -q '"extensions"'
           printf '%s' "$formats_json" | grep -q '"pdf"'
-          # 打印机列表应包含入口脚本配置的 CUPS-PDF
+
+          step "printers"
           printers_json="$(curl -s -H 'Authorization: Bearer ci-smoke-test' http://127.0.0.1:8080/api/printers)"
-          printf '%s' "$printers_json" | grep -q '"id":"CUPS-PDF"'
-          # 上传 txt -> LibreOffice 转 PDF -> 预览
+          if ! printf '%s' "$printers_json" | grep -q '"id":"CUPS-PDF"'; then
+            echo "printers response: $printers_json"
+            exit 1
+          fi
+
+          step "upload txt -> preview"
           printf 'hello just-print' > /tmp/ci-sample.txt
           file_json="$(curl -s -H 'Authorization: Bearer ci-smoke-test' \
             -F 'file=@/tmp/ci-sample.txt;filename=ci-sample.txt' \
             http://127.0.0.1:8080/api/files)"
           file_id="$(printf '%s' "$file_json" | sed -n 's/.*"id":"\([0-9a-f]\{32\}\)".*/\1/p')"
-          test -n "$file_id"
+          if [ -z "$file_id" ]; then
+            echo "upload response: $file_json"
+            exit 1
+          fi
           curl -fsS -H 'Authorization: Bearer ci-smoke-test' \
             "http://127.0.0.1:8080/api/files/$file_id" -o /tmp/ci-preview.pdf
           head -c 5 /tmp/ci-preview.pdf | grep -q '%PDF-'
-          # Markdown 应渲染为 HTML 再转 PDF：内容存在且不含原始 Markdown 标记
+
+          step "markdown -> styled PDF"
           printf '# Just Print MD Test\n\n**bold text**\n\n```\ncode block line\n```\n' > /tmp/ci-sample.md
           md_json="$(curl -s -H 'Authorization: Bearer ci-smoke-test' \
             -F 'file=@/tmp/ci-sample.md;filename=ci-sample.md' \
             http://127.0.0.1:8080/api/files)"
           md_id="$(printf '%s' "$md_json" | sed -n 's/.*"id":"\([0-9a-f]\{32\}\)".*/\1/p')"
-          test -n "$md_id"
+          if [ -z "$md_id" ]; then
+            echo "markdown upload response: $md_json"
+            exit 1
+          fi
           md_text="$(curl -fsS -H 'Authorization: Bearer ci-smoke-test' \
             "http://127.0.0.1:8080/api/files/$md_id" | docker exec -i "$cid" pdftotext - -)"
           printf '%s' "$md_text" | grep -q 'Just Print MD Test'
@@ -123,18 +148,24 @@ jobs:
             echo "raw markdown leaked into PDF"
             exit 1
           fi
-          # 不存在的打印机提交任务应返回 404
+
+          step "print: missing printer -> 404"
           test "$(curl -s -o /dev/null -w '%{http_code}' \
             -H 'Authorization: Bearer ci-smoke-test' -H 'Content-Type: application/json' \
             -d "{\"file_id\":\"$file_id\",\"printer_id\":\"missing\"}" \
             http://127.0.0.1:8080/api/print)" = 404
-          # 未提供选项的打印应成功并最终 completed，且 cups-pdf 生成 PDF
+
+          step "print over IPP -> wait completed"
           print_json="$(curl -s -H 'Authorization: Bearer ci-smoke-test' \
             -H 'Content-Type: application/json' \
             -d "{\"file_id\":\"$file_id\",\"printer_id\":\"CUPS-PDF\",\"options\":{}}" \
             http://127.0.0.1:8080/api/print)"
           job_id="$(printf '%s' "$print_json" | sed -n 's/.*"job_id":"\([^"]*\)".*/\1/p')"
-          test -n "$job_id"
+          if [ -z "$job_id" ]; then
+            echo "print response: $print_json"
+            exit 1
+          fi
+          job_json=""
           for _ in $(seq 1 30); do
             job_json="$(curl -s -H 'Authorization: Bearer ci-smoke-test' \
               "http://127.0.0.1:8080/api/jobs/$job_id")"
@@ -143,15 +174,20 @@ jobs:
             fi
             sleep 1
           done
-          printf '%s' "$job_json" | grep -q '"status":"completed"'
+          if ! printf '%s' "$job_json" | grep -q '"status":"completed"'; then
+            echo "job response: $job_json"
+            exit 1
+          fi
           docker exec "$cid" sh -c \
             'find /var/spool/cups-pdf -name "*.pdf" -size +0c | grep -q .'
-          # 未知选项应返回 400 invalid_controls
+
+          step "invalid controls -> 400"
           test "$(curl -s -o /dev/null -w '%{http_code}' \
             -H 'Authorization: Bearer ci-smoke-test' -H 'Content-Type: application/json' \
             -d "{\"file_id\":\"$file_id\",\"printer_id\":\"CUPS-PDF\",\"options\":{\"DefinitelyNotAnOption\":\"x\"}}" \
             http://127.0.0.1:8080/api/print)" = 400
-          # 幂等：同一 Idempotency-Key 重复提交返回同一任务，第二次标记为回放
+
+          step "idempotency: same key replays the same job"
           key="smoke-idem-1"
           body="{\"file_id\":\"$file_id\",\"printer_id\":\"CUPS-PDF\",\"options\":{}}"
           first="$(curl -s -H 'Authorization: Bearer ci-smoke-test' \
@@ -162,10 +198,14 @@ jobs:
             -d "$body" http://127.0.0.1:8080/api/print)"
           first_id="$(printf '%s' "$first" | sed -n 's/.*"job_id":"\([^"]*\)".*/\1/p')"
           second_id="$(printf '%s' "$second" | sed -n 's/.*"job_id":"\([^"]*\)".*/\1/p')"
-          test -n "$first_id"
-          test "$first_id" = "$second_id"
+          if [ -z "$first_id" ] || [ "$first_id" != "$second_id" ]; then
+            echo "first: $first"
+            echo "second: $second"
+            exit 1
+          fi
           grep -qi 'idempotency-replayed: true' /tmp/idem-headers
-          # 任务列表与取消端点可用（取消可能因任务已完成而返回 404/409）
+
+          step "jobs list + cancel"
           curl -fsS -H 'Authorization: Bearer ci-smoke-test' \
             'http://127.0.0.1:8080/api/jobs?limit=5' | grep -q '"jobs"'
           cancel_status="$(curl -s -o /dev/null -w '%{http_code}' -X DELETE \
@@ -175,7 +215,8 @@ jobs:
             204|404|409) ;;
             *) echo "unexpected cancel status: $cancel_status"; exit 1 ;;
           esac
-          # 删除上传文件
+
+          step "delete uploaded file"
           test "$(curl -s -o /dev/null -w '%{http_code}' -X DELETE \
             -H 'Authorization: Bearer ci-smoke-test' \
             "http://127.0.0.1:8080/api/files/$md_id")" = 204
