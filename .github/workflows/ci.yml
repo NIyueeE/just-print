@@ -208,12 +208,14 @@ jobs:
           step "jobs list + cancel"
           curl -fsS -H 'Authorization: Bearer ci-smoke-test' \
             'http://127.0.0.1:8080/api/jobs?limit=5' | grep -q '"jobs"'
-          cancel_status="$(curl -s -o /dev/null -w '%{http_code}' -X DELETE \
+          cancel_response="$(curl -s -w '\n%{http_code}' -X DELETE \
             -H 'Authorization: Bearer ci-smoke-test' \
             "http://127.0.0.1:8080/api/jobs/$first_id")"
+          cancel_status="${cancel_response##*$'\n'}"
+          cancel_body="${cancel_response%$'\n'*}"
           case "$cancel_status" in
             204|404|409) ;;
-            *) echo "unexpected cancel status: $cancel_status"; exit 1 ;;
+            *) echo "unexpected cancel status: $cancel_status body: $cancel_body"; exit 1 ;;
           esac
 
           step "delete uploaded file"
