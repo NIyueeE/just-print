@@ -259,6 +259,16 @@ export function MoonIcon(props: IconProps) {
   )
 }
 
+/** 跟随系统主题。 */
+export function MonitorIcon(props: IconProps) {
+  return (
+    <Icon {...props}>
+      <rect width="20" height="14" x="2" y="3" rx="2" />
+      <path d="M8 21h8M12 17v4" />
+    </Icon>
+  )
+}
+
 export function BanIcon(props: IconProps) {
   return (
     <Icon {...props}>

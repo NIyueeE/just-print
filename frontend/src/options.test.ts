@@ -174,4 +174,54 @@ describe('默认选项推导', () => {
     expect(byLabel.get('份数')).toBe('打印机默认')
     expect(byLabel.get('分辨率')).toBe('打印机默认')
   })
+
+  it('treats a cleared numeric value as "printer default"', () => {
+    const printer = makePrinter({
+      copies: { kind: 'integer', default: '1', min: 1, max: 99 },
+    })
+    const rows = summarizeOptions(printer, { copies: '' })
+    expect(rows).toEqual([{ key: 'copies', label: '份数', value: '打印机默认' }])
+  })
+
+  it('normalizes an enum default that is not a selectable choice', () => {
+    // 服务端若给出枚举的数值形式（IPP enum），直接采用会让 <select> 匹配不到任何
+    // option 而渲染成空白；这里必须回退到候选项里的等价名称。
+    expect(
+      defaultOptionValue('print-quality', {
+        kind: 'enum',
+        default: '4',
+        values: [
+          { value: 3, name: 'draft' },
+          { value: 4, name: 'normal' },
+          { value: 5, name: 'high' },
+        ],
+      }),
+    ).toBe('normal')
+
+    // 既不是名称也不是数值时回退到第一个候选项，保证控件始终有值。
+    expect(
+      defaultOptionValue('print-quality', {
+        kind: 'enum',
+        default: '9',
+        values: [
+          { value: 3, name: 'draft' },
+          { value: 5, name: 'high' },
+        ],
+      }),
+    ).toBe('draft')
+  })
+
+  it('normalizes resolution and integer_choices defaults outside their candidate list', () => {
+    expect(
+      defaultOptionValue('printer-resolution', {
+        kind: 'resolution',
+        default: '9999x9999dpi',
+        values: [{ cross_feed: 600, feed: 600, units: 3, label: '600x600dpi' }],
+      }),
+    ).toBe('600x600dpi')
+
+    expect(
+      defaultOptionValue('number-up', { kind: 'integer_choices', default: '8', values: [1, 2, 4] }),
+    ).toBe('1')
+  })
 })

@@ -156,6 +156,8 @@ export function usePrintSubmission(): PrintSubmission {
         })
       } catch (error) {
         if (isAbortError(error)) {
+          // 取消提交必须复位 UI：只 return 会让确认对话框永远停在 busy。
+          dispatch({ type: 'print/abort' })
           return
         }
         if (authGuard(error)) {

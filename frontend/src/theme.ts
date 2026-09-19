@@ -49,7 +49,7 @@ export function applyThemePreference(preference: ThemePreference): void {
   }
 }
 
-/** 在“跟随系统 → 明 → 暗”之间循环。 */
+/** 在“跟随系统 → 明 → 暗 → 跟随系统”之间循环（必须能回到跟随系统）。 */
 export function nextThemePreference(
   preference: ThemePreference,
   resolved: ResolvedTheme,
@@ -57,5 +57,5 @@ export function nextThemePreference(
   if (preference === 'system') {
     return resolved === 'dark' ? 'light' : 'dark'
   }
-  return preference === 'dark' ? 'light' : 'dark'
+  return preference === 'light' ? 'dark' : 'system'
 }

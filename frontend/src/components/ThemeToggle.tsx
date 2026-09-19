@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'preact/hooks'
-import { MoonIcon, SunIcon } from '../icons'
+import { MonitorIcon, MoonIcon, SunIcon } from '../icons'
 import {
   applyThemePreference,
   nextThemePreference,
@@ -10,7 +10,13 @@ import {
 } from '../theme'
 import './ThemeToggle.css'
 
-/** 手动主题切换：跟随系统 → 明 → 暗，偏好持久化在 localStorage。 */
+const PREFERENCE_LABEL: Record<ThemePreference, string> = {
+  system: '跟随系统',
+  light: '浅色',
+  dark: '深色',
+}
+
+/** 手动主题切换：跟随系统 → 明 → 暗 → 跟随系统，偏好持久化在 localStorage。 */
 export function ThemeToggle() {
   const [preference, setPreference] = useState<ThemePreference>(() => readThemePreference())
   const [resolved, setResolved] = useState<ResolvedTheme>(() => resolveTheme(readThemePreference()))
@@ -27,20 +33,28 @@ export function ThemeToggle() {
     return () => media.removeEventListener('change', onChange)
   }, [preference])
 
-  const nextLabel = resolved === 'dark' ? '切换到浅色主题' : '切换到深色主题'
+  // 图标与文案表示「当前」偏好；可访问名说明「点击之后会怎样」。
+  const next = nextThemePreference(preference, resolveTheme(preference))
+  const actionLabel = next === 'system' ? '恢复跟随系统主题' : `切换到${PREFERENCE_LABEL[next]}主题`
 
   return (
     <button
       type="button"
       class="ghost theme-toggle"
-      aria-label={nextLabel}
-      title={nextLabel}
+      aria-label={actionLabel}
+      title={`${actionLabel}（当前：${PREFERENCE_LABEL[preference]}）`}
       onClick={() =>
         setPreference((current) => nextThemePreference(current, resolveTheme(current)))
       }
     >
-      {resolved === 'dark' ? <SunIcon size={16} /> : <MoonIcon size={16} />}
-      <span class="theme-toggle__label">{resolved === 'dark' ? '浅色' : '深色'}</span>
+      {preference === 'system' ? (
+        <MonitorIcon size={16} />
+      ) : resolved === 'dark' ? (
+        <MoonIcon size={16} />
+      ) : (
+        <SunIcon size={16} />
+      )}
+      <span class="theme-toggle__label">{PREFERENCE_LABEL[preference]}</span>
     </button>
   )
 }

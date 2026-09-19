@@ -177,13 +177,43 @@ function preferredEnum(key: string, values: readonly EnumOptionValue[]): string 
   return null
 }
 
+/**
+ * 把服务端的 `default` 归一到「控件里真实存在的取值」。
+ *
+ * 服务端可能给出不在 `*-supported` 列表里的默认值（例如 enum 的 default 是数字、
+ * 而候选项是名称，或 PPD 与 IPP 上报不一致）。这时如果直接采用，`<select>` 的
+ * `value` 匹配不到任何 `<option>`，控件会渲染成空白——用户看不见当前值，
+ * 提交时又会因为越界值被服务端拒绝。这里统一回退到候选项里的等价项。
+ */
+function matchChoice(values: readonly string[], raw: string | null): string | null {
+  if (raw === null) {
+    return null
+  }
+  return values.find((candidate) => candidate === raw) ?? null
+}
+
 /** 单个选项的默认提交值；无法确定时返回 null。 */
 export function defaultOptionValue(key: string, spec: OptionSpec): string | null {
   switch (spec.kind) {
     case 'keyword':
-      return preferredKeyword(key, spec.values) ?? spec.default ?? spec.values[0] ?? null
-    case 'enum':
-      return preferredEnum(key, spec.values) ?? spec.default ?? spec.values[0]?.name ?? null
+      return (
+        preferredKeyword(key, spec.values) ??
+        matchChoice(spec.values, spec.default) ??
+        spec.values[0] ??
+        null
+      )
+    case 'enum': {
+      // 枚举的 default 是名称；同时容忍 IPP 数字形式，最终统一返回名称。
+      const names = spec.values.map((value) => value.name)
+      const numeric = spec.values.find((value) => String(value.value) === spec.default)?.name
+      return (
+        preferredEnum(key, spec.values) ??
+        matchChoice(names, spec.default) ??
+        numeric ??
+        spec.values[0]?.name ??
+        null
+      )
+    }
     case 'integer':
       if (isResolutionKey(key)) {
         return String(spec.max)
@@ -196,11 +226,13 @@ export function defaultOptionValue(key: string, spec: OptionSpec): string | null
       if (isResolutionKey(key)) {
         return String(Math.max(...spec.values))
       }
-      return spec.default ?? String(spec.values[0])
+      const choices = spec.values.map((value) => String(value))
+      return matchChoice(choices, spec.default) ?? spec.values[0]?.toString() ?? null
     }
     case 'resolution': {
       const best = highestResolution(spec.values)
-      return best?.label ?? spec.default ?? null
+      const labels = spec.values.map((value) => value.label)
+      return best?.label ?? matchChoice(labels, spec.default) ?? spec.values[0]?.label ?? null
     }
   }
 }
@@ -307,13 +339,15 @@ export interface OptionSummaryRow {
   value: string
 }
 
-/** 确认对话框必须覆盖的关键项（即使打印机未暴露该选项也要说明“打印机默认”）。 */
+/** 确认对话框重点展示的关键项：打印机提供这些选项时，即使没有显式设置也要列出。 */
 const SUMMARY_KEYS: readonly string[] = ['copies', 'sides', 'media', 'printer-resolution']
 
 /**
  * 为确认对话框生成选项摘要：
- *   - 始终包含份数 / 单双面 / 纸张 / 分辨率，缺失时显示“打印机默认”；
- *   - 其余已设置且有目录定义的选项一并展示。
+ *   - 只为「该打印机选项目录里存在」的选项生成行（目录里没有的选项，界面上
+ *     本来就没有对应控件，不必在确认页虚构一行）；
+ *   - 关键项（份数 / 单双面 / 纸张 / 分辨率）即使未显式设置也会列出，显示“打印机默认”；
+ *   - 空值（数字输入框被清空）同样表示“打印机默认”。
  */
 export function summarizeOptions(
   printer: Printer,
@@ -331,7 +365,8 @@ export function summarizeOptions(
     return {
       key,
       label: controlLabel(key),
-      value: value === undefined ? '打印机默认' : describeOptionValue(key, spec, value),
+      value:
+        value === undefined || value === '' ? '打印机默认' : describeOptionValue(key, spec, value),
     }
   })
 }

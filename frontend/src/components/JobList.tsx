@@ -82,7 +82,14 @@ export function JobList() {
         if (isAbortError(error) || controller.signal.aborted) {
           return
         }
-        authGuard(error)
+        if (authGuard(error)) {
+          return
+        }
+        // 静默失败会让用户以为「没有任务」：把错误显示在任务卡片里。
+        dispatch({
+          type: 'jobs/error',
+          message: `任务列表加载失败：${errorMessage(error)}${retryAfterHint(error)}`,
+        })
       },
     )
     return () => controller.abort()
@@ -144,7 +151,7 @@ export function JobList() {
     { intervalMs: 3000, enabled: hasActive, backoffBaseMs: 2000, backoffMaxMs: 30_000 },
   )
 
-  if (jobs.views.length === 0) {
+  if (jobs.views.length === 0 && jobs.lastError === null) {
     return null
   }
 

@@ -8,6 +8,7 @@ import { PrinterPanel } from './components/PrinterPanel'
 import { ThemeToggle } from './components/ThemeToggle'
 import { TokenGate } from './components/TokenGate'
 import { Uploader } from './components/Uploader'
+import { formatDurationMs } from './format'
 import { GitHubIcon, LogoMark, LogoutIcon } from './icons'
 import { useAuthGuard } from './hooks/useAuthGuard'
 import { usePrintSubmission } from './print'
@@ -53,6 +54,13 @@ export function App() {
 
   const stepStates = deriveSteps(state)
   const confirmation = print.confirmation
+  // 服务端要求等待时把等待时长写进错误文案，否则用户会立刻重试、再撞一次同样的错误。
+  const printError =
+    print.error === null
+      ? null
+      : print.retryAfterMs !== null && print.retryAfterMs > 0
+        ? `${print.error}（服务端建议约 ${formatDurationMs(print.retryAfterMs)}后重试）`
+        : print.error
 
   function handleLogout(): void {
     clearStoredToken()
@@ -111,7 +119,7 @@ export function App() {
         confirmLabel={print.error !== null ? '重试提交' : '确认打印'}
         busyLabel="提交中…"
         busy={print.submitting}
-        error={print.error}
+        error={printError}
         onConfirm={() => {
           if (confirmation !== null) {
             void submit(confirmation)

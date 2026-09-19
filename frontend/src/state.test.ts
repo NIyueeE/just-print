@@ -51,6 +51,14 @@ function reduce(...actions: Parameters<typeof appReducer>[1][]): AppState {
   return actions.reduce((state, action) => appReducer(state, action), createInitialState('token'))
 }
 
+function pending(payload: {
+  file_id: string
+  printer_id: string
+  options: Record<string, string>
+}) {
+  return { payload, printerName: 'CUPS-PDF', fileName: 'a.pdf', summary: [] }
+}
+
 describe('认证与通知', () => {
   it('returns to the gate with an explanatory message on 401', () => {
     const state = reduce({ type: 'auth/invalid', message: '登录状态已失效' })
@@ -196,5 +204,21 @@ describe('步骤与打印尝试', () => {
     state = appReducer(state, { type: 'print/settled' })
     expect(state.print.submitting).toBe(false)
     expect(state.print.attempt?.settled).toBe(true)
+  })
+
+  it('clears the busy flag when a submit is aborted', () => {
+    const payload = { file_id: 'f', printer_id: 'p', options: {} }
+    const { attempt } = resolveAttempt(null, printFingerprint(payload), () => 'key-2')
+    let state = appReducer(reduce({ type: 'print/confirm', pending: pending(payload) }), {
+      type: 'print/begin',
+      attempt,
+    })
+    expect(state.print.submitting).toBe(true)
+
+    // 取消提交后必须复位，否则确认对话框会永远停在 busy（按钮全禁用、Esc 失效）。
+    state = appReducer(state, { type: 'print/abort' })
+    expect(state.print.submitting).toBe(false)
+    expect(state.print.confirmation).toBeNull()
+    expect(state.print.error).toBeNull()
   })
 })

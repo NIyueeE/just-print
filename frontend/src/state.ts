@@ -174,6 +174,7 @@ export type Action =
   | { type: 'print/confirm'; pending: PendingPrint }
   | { type: 'print/cancel-confirm' }
   | { type: 'print/begin'; attempt: PrintAttempt }
+  | { type: 'print/abort' }
   | { type: 'print/reset-attempt' }
   | { type: 'print/settled' }
   | { type: 'print/error'; message: string; retryable: boolean; retryAfterMs: number | null }
@@ -475,6 +476,21 @@ export function appReducer(state: AppState, action: Action): AppState {
           retryable: false,
           retryAfterMs: null,
           attempt: action.attempt,
+        },
+      }
+
+    case 'print/abort':
+      // 提交被取消（例如退出登录或用户中止）：必须清掉 submitting，
+      // 否则确认对话框会永远停在 busy（全部按钮禁用、Esc 也失效）。
+      return {
+        ...state,
+        print: {
+          ...state.print,
+          submitting: false,
+          confirmation: null,
+          error: null,
+          retryable: false,
+          retryAfterMs: null,
         },
       }
 

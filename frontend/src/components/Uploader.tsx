@@ -4,6 +4,7 @@ import {
   deleteFile,
   errorMessage,
   fetchPreview,
+  getFormats,
   isAbortError,
   uploadFile,
   type Formats,
@@ -13,10 +14,12 @@ import { useAuthGuard } from '../hooks/useAuthGuard'
 import {
   AlertIcon,
   BanIcon,
+  CheckIcon,
   ChevronDownIcon,
   ChevronUpIcon,
   EyeIcon,
   FileTextIcon,
+  RefreshIcon,
   SpinnerIcon,
   UploadIcon,
   XIcon,
@@ -202,12 +205,26 @@ export function Uploader() {
     }
     const invalid = validateFile(file, formats)
     if (invalid !== null) {
-      dispatch({ type: 'upload/select', file: null })
+      // 只提示错误，保留当前已选/已上传的文件：直接清空会连带丢弃已经转换好的
+      // 服务端文件与预览，用户还得重新上传一次。
       dispatch({ type: 'upload/error', message: invalid })
       return
     }
     dispatch({ type: 'upload/select', file })
     setPreviewOpen(true)
+  }
+
+  /** 重新拉取 /api/formats（首次加载失败后由用户手动触发）。 */
+  async function reloadFormats(): Promise<void> {
+    try {
+      const loaded = await getFormats()
+      dispatch({ type: 'formats/loaded', formats: loaded })
+    } catch (requestError) {
+      if (authGuard(requestError)) {
+        return
+      }
+      dispatch({ type: 'formats/error', message: errorMessage(requestError) })
+    }
   }
 
   async function loadPreview(fileId: string): Promise<void> {
@@ -241,6 +258,9 @@ export function Uploader() {
     if (file === null || busy) {
       return
     }
+    // 重新上传意味着上一个预览已经过期，先中断它的请求。
+    previewControllerRef.current?.abort()
+    previewControllerRef.current = null
     const controller = new AbortController()
     uploadControllerRef.current = controller
     dispatch({ type: 'upload/start' })
@@ -280,6 +300,10 @@ export function Uploader() {
   /** 移除已选/已上传文件；已上传的会顺带请求 DELETE /api/files/{id}。 */
   async function handleRemove(): Promise<void> {
     const result = upload.result
+    // 先中断预览请求：否则它可能在移除之后才返回，写入已经无人使用的 blob URL
+    // （再也不会被回收），并且预览仍持有文件引用导致 DELETE 返回 409。
+    previewControllerRef.current?.abort()
+    previewControllerRef.current = null
     dispatch({ type: 'upload/reset' })
     if (result === null) {
       return
@@ -336,6 +360,10 @@ export function Uploader() {
         <div class="inline-hint inline-hint--warning" role="status">
           <AlertIcon size={15} />
           <span>无法读取支持格式列表，将由服务器在收到文件时校验：{formatsError}</span>
+          <button type="button" class="ghost ghost--sm" onClick={() => void reloadFormats()}>
+            <RefreshIcon size={14} />
+            重试
+          </button>
         </div>
       ) : null}
 
@@ -453,13 +481,18 @@ export function Uploader() {
           <button
             type="button"
             class="primary"
-            disabled={upload.file === null || busy}
+            disabled={upload.file === null || busy || upload.result !== null}
             onClick={() => void handleUpload()}
           >
             {busy ? (
               <>
                 <SpinnerIcon size={16} />
                 {upload.phase === 'converting' ? '转换中…' : '上传中…'}
+              </>
+            ) : upload.result !== null ? (
+              <>
+                <CheckIcon size={16} />
+                已上传并转换
               </>
             ) : (
               <>
