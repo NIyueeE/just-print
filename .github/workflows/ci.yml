@@ -89,6 +89,16 @@ jobs:
           docker exec "$cid" lpstat -r | grep -q 'scheduler is running'
           docker exec "$cid" lpstat -p CUPS-PDF | grep -q 'CUPS-PDF'
 
+          # USB 打印机依赖 CUPS 的 usb 后端；Debian 13 的包只提供 ipp 后端，
+          # 这里只做可见性检查（不失败），便于确认 USB 队列是否还建得起来。
+          step "CUPS backends (USB 可用性)"
+          docker exec "$cid" sh -c 'ls /usr/lib/cups/backend/ | tr "\n" " "; echo'
+          if docker exec "$cid" test -x /usr/lib/cups/backend/usb; then
+            echo "==> usb backend: present"
+          else
+            echo "==> WARNING: usb backend missing — USB 打印机队列将无法创建"
+          fi
+
           step "conversions (text + emoji font)"
           docker exec -w /tmp "$cid" sh -c \
             'printf "hello" > sample.txt && soffice --headless --convert-to pdf --outdir /tmp /tmp/sample.txt >/dev/null && test -s /tmp/sample.pdf'

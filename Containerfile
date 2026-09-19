@@ -19,7 +19,7 @@ COPY src/ ./src/
 RUN cargo build --release --locked
 
 # ---------- 运行镜像 ----------
-FROM docker.io/library/debian:bookworm-slim
+FROM docker.io/library/debian:trixie-slim
 # printer-driver-hpcups：HPLIP 的 PCL 驱动与 PPD（含 HP LaserJet 4000 等常见机型），
 # 让 USB 队列的型号匹配能命中厂商 PPD 而不是通用 PCL 兜底。
 RUN apt-get update \
@@ -29,7 +29,6 @@ RUN apt-get update \
         cups \
         cups-client \
         cups-filters \
-        cups-pdf \
         curl \
         dbus \
         fonts-liberation \
@@ -40,6 +39,7 @@ RUN apt-get update \
         libreoffice-calc \
         libreoffice-impress \
         poppler-utils \
+        printer-driver-cups-pdf \
         printer-driver-hpcups \
     && rm -rf /var/lib/apt/lists/*
 
