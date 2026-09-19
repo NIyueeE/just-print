@@ -3,11 +3,21 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use crate::config::Config;
-use crate::conversion::CONVERSION_SLOTS;
-use crate::cups::CupsClient;
-use crate::store::FileStore;
 use tokio::sync::Semaphore;
+
+use crate::config::Config;
+use crate::cups::{CupsClient, CupsError};
+use crate::idempotency::IdempotencyStore;
+use crate::jobs::JobRegistry;
+use crate::metrics::Metrics;
+use crate::store::FileStore;
+
+/// 幂等键存储容量上限。
+pub const IDEMPOTENCY_CAPACITY: usize = 1024;
+/// 任务登记表容量上限。
+pub const JOB_REGISTRY_CAPACITY: usize = 512;
+/// 任务元数据保留时长。
+pub const JOB_REGISTRY_TTL: std::time::Duration = std::time::Duration::from_hours(24);
 
 /// 容器内临时目录；启动时清空上一次运行的残留文件。
 #[derive(Debug)]
@@ -44,24 +54,46 @@ pub struct AppState {
     pub config: Config,
     /// 文件存储（引用计数 + TTL）。
     pub files: Arc<FileStore>,
-    /// CUPS 客户端（打印机枚举、选项、提交与任务查询）。
-    pub cups: CupsClient,
+    /// IPP 客户端（打印机枚举、选项、提交、任务查询与取消）。
+    pub cups: Arc<CupsClient>,
+    /// 任务元数据登记表。
+    pub jobs: JobRegistry,
+    /// 幂等键存储。
+    pub idempotency: IdempotencyStore,
+    /// Prometheus 指标。
+    pub metrics: Arc<Metrics>,
     /// 限制 `LibreOffice` 并发转换的信号量。
     pub conversion_slots: Arc<Semaphore>,
+    /// 限制并发上传的信号量。
+    pub upload_slots: Arc<Semaphore>,
     /// 临时文件目录。
     pub temp_dir: PathBuf,
 }
 
 impl AppState {
     /// 组装共享状态。
-    #[must_use]
-    pub fn new(config: Config, temp_dir: PathBuf) -> Self {
-        Self {
+    ///
+    /// # Errors
+    ///
+    /// CUPS 地址不合法时返回 [`CupsError`]。
+    pub fn new(config: Config, temp_dir: PathBuf) -> Result<Self, CupsError> {
+        let cups = CupsClient::new(
+            config.cups_server.clone(),
+            config.cups_scheme.clone(),
+            config.ipp_timeout,
+            config.printer_cache_ttl,
+            config.job_cache_ttl,
+        )?;
+        Ok(Self {
             files: Arc::new(FileStore::default()),
-            cups: CupsClient::new(config.cups_server.clone(), config.cups_scheme.clone()),
-            conversion_slots: Arc::new(Semaphore::new(CONVERSION_SLOTS)),
+            cups: Arc::new(cups),
+            jobs: JobRegistry::new(JOB_REGISTRY_TTL, JOB_REGISTRY_CAPACITY),
+            idempotency: IdempotencyStore::new(config.idempotency_ttl, IDEMPOTENCY_CAPACITY),
+            metrics: Arc::new(Metrics::new()),
+            conversion_slots: Arc::new(Semaphore::new(config.conversion_slots)),
+            upload_slots: Arc::new(Semaphore::new(config.upload_slots)),
             config,
             temp_dir,
-        }
+        })
     }
 }

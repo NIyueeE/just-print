@@ -1,245 +1,155 @@
-//! CUPS 集成：打印机枚举、选项读取、任务提交与状态查询。
+//! CUPS 集成：直接通过 IPP over HTTP 与 CUPS 通信。
 //!
-//! 通过 `lp` / `lpstat` / `lpoptions` 命令行工具与 CUPS 交互，应用层不再
-//! 实现 PJL 会话、设备发现或每打印机队列。所有子进程强制使用 `C` locale，
-//! 保证输出格式稳定。
+//! 使用标准 IPP（RFC 8011）操作实现全部能力：`CUPS-Get-Printers` 枚举打印机、
+//! `Get-Printer-Attributes` 读取选项、`Print-Job` 提交文档、
+//! `Get-Job-Attributes` / `Get-Jobs` 查询任务、`Cancel-Job` 取消任务。
+//! 应用层不再依赖 `lp` / `lpstat` / `lpoptions` / `ipptool` 子进程，也没有
+//! 每请求 fork 的开销。
+//!
+//! 打印机快照与任务状态都带短 TTL 缓存与 singleflight 刷新，前端轮询不会直接
+//! 放大成 CUPS 请求风暴。
 
-use std::collections::BTreeMap;
+mod options;
+
+pub use options::{OptionSpec, encode_job_attributes};
+
+use std::collections::{BTreeMap, HashMap};
 use std::path::Path;
-use std::process::Output;
-use std::time::Duration;
+use std::sync::Arc;
+use std::time::{Duration, Instant};
 
+use ipp::attribute::{IppAttribute, IppAttributeGroup};
+use ipp::error::IppError;
+use ipp::model::{DelimiterTag, IppVersion, JobState, Operation, PrinterState, StatusCode};
+use ipp::operation::builder::IppOperationBuilder;
+use ipp::payload::IppPayload;
+use ipp::prelude::{AsyncIppClient, IppRequestResponse, Uri};
+use ipp::value::IppValue;
 use serde::Serialize;
 use thiserror::Error;
-use tokio::process::Command;
-use tracing::debug;
+use tokio::sync::{Mutex, RwLock};
+use tokio_util::compat::TokioAsyncReadCompatExt;
+use tracing::{debug, warn};
 
-/// 默认 CUPS 服务地址。
-pub const DEFAULT_CUPS_URI: &str = "http://127.0.0.1:631";
-/// 单条 CUPS 命令超时。
-pub const CUPS_TIMEOUT: Duration = Duration::from_secs(10);
+/// 提交给 CUPS 的 `requesting-user-name`。
+pub const CUPS_USER: &str = "just-print";
+/// 打印文档的 MIME 类型。
+pub const APPLICATION_PDF: &str = "application/pdf";
 
 /// CUPS 集成错误。
 #[derive(Debug, Error)]
 pub enum CupsError {
-    /// 子进程启动失败。
-    #[error("CUPS 命令启动失败: {0}")]
-    Spawn(String),
-    /// 子进程非零退出。
-    #[error("CUPS 命令失败（{program}）: {stderr}")]
-    Command {
-        /// 失败的命令名。
-        program: &'static str,
-        /// CUPS 输出到 stderr 的错误信息。
-        stderr: String,
-    },
-    /// 子进程超时。
-    #[error("CUPS 命令超时（{0}）")]
-    Timeout(&'static str),
-    /// 输出解析失败。
-    #[error("CUPS 输出解析失败: {0}")]
-    Parse(String),
+    /// CUPS 不可达（连接失败、DNS 失败等）。
+    #[error("CUPS 不可用: {0}")]
+    Unavailable(String),
+    /// IPP 请求超时。
+    #[error("CUPS 请求超时")]
+    Timeout,
+    /// CUPS 中不存在对应对象（打印机 / 任务）。
+    #[error("CUPS 中不存在该对象")]
+    NotFound,
+    /// 请求参数不合法（IPP 客户端错误）。
+    #[error("{0}")]
+    Invalid(String),
+    /// 打印机存在但当前不可用。
+    #[error("打印机不可用: {0}")]
+    PrinterUnavailable(String),
+    /// IPP 协议或编码错误。
+    #[error("IPP 协议错误: {0}")]
+    Protocol(String),
 }
 
-/// CUPS 客户端；所有调用均通过子进程完成。
-#[derive(Debug, Clone)]
-pub struct CupsClient {
-    server: String,
-    scheme: String,
-    timeout: Duration,
-}
-
-impl CupsClient {
-    /// 创建 CUPS 客户端。
-    ///
-    /// `server` 为 `host:port` 形式，将写入子进程的 `CUPS_SERVER` 环境变量；
-    /// `scheme` 为 `ipp` / `ipps`，用于构造 IPP 查询 URI。
+impl CupsError {
+    /// 根据 IPP 状态码构造错误。
     #[must_use]
-    pub fn new(server: String, scheme: String) -> Self {
-        Self {
-            server,
-            scheme,
-            timeout: CUPS_TIMEOUT,
-        }
-    }
-
-    /// 列出 CUPS 中已配置的打印机（含状态与描述）。
-    ///
-    /// # Errors
-    ///
-    /// `lpstat` 失败或输出无法解析时返回 [`CupsError`]。
-    pub async fn list_printers(&self) -> Result<Vec<PrinterInfo>, CupsError> {
-        let output = self.run("lpstat", &["-p", "-l"]).await?;
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        parse_printers(&stdout).map_err(CupsError::Parse)
-    }
-
-    /// 读取打印机的 `lpoptions -l` 选项表。
-    ///
-    /// # Errors
-    ///
-    /// `lpoptions` 失败或输出无法解析时返回 [`CupsError`]。
-    pub async fn list_options(
-        &self,
-        printer: &str,
-    ) -> Result<BTreeMap<String, OptionSpec>, CupsError> {
-        let output = self.run("lpoptions", &["-p", printer, "-l"]).await?;
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        Ok(parse_options(&stdout))
-    }
-
-    /// 通过 `lp` 提交打印任务，返回 CUPS 任务 id（`printer-job` 形式）。
-    ///
-    /// # Errors
-    ///
-    /// `lp` 失败、超时或输出无法解析时返回 [`CupsError`]。
-    pub async fn submit(
-        &self,
-        printer: &str,
-        file: &Path,
-        options: &BTreeMap<String, String>,
-    ) -> Result<String, CupsError> {
-        let mut args = vec!["-d".to_string(), printer.to_string()];
-        for (key, value) in options {
-            args.push("-o".to_string());
-            args.push(format!("{key}={value}"));
-        }
-        args.push(file.to_string_lossy().into_owned());
-        let arg_refs: Vec<&str> = args.iter().map(String::as_str).collect();
-        let output = self.run("lp", &arg_refs).await?;
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        parse_job_id(&stdout)
-            .ok_or_else(|| CupsError::Parse(format!("无法解析 lp 输出中的任务 id: {stdout}")))
-    }
-
-    /// 查询单个任务状态；CUPS 中不存在时返回 `None`。
-    ///
-    /// # Errors
-    ///
-    /// `lpstat` / `ipptool` 失败或输出无法解析时返回 [`CupsError`]。
-    pub async fn job_status(&self, job_id: &str) -> Result<Option<JobInfo>, CupsError> {
-        let Some((printer_id, job_number)) = self.find_job_destination(job_id).await? else {
-            return Ok(None);
+    pub fn from_status(status: StatusCode, message: &str) -> Self {
+        use StatusCode::{
+            ClientErrorAttributesOrValuesNotSupported, ClientErrorBadRequest,
+            ClientErrorConflictingAttributes, ClientErrorDocumentFormatError,
+            ClientErrorDocumentFormatNotSupported, ClientErrorGone, ClientErrorNotFound,
+            ClientErrorRequestValueTooLong, ServerErrorBusy, ServerErrorDeviceError,
+            ServerErrorNotAcceptingJobs, ServerErrorServiceUnavailable, ServerErrorTemporaryError,
         };
-        let request = format!(
-            "{{\n  OPERATION Get-Job-Attributes\n  GROUP operation-attributes-tag\n  \
-             ATTR charset attributes-charset utf-8\n  \
-             ATTR language attributes-natural-language en\n  \
-             ATTR uri printer-uri {}\n  ATTR integer job-id {}\n}}\n",
-            self.printer_uri(&printer_id),
-            job_number
-        );
-        let request_path =
-            std::env::temp_dir().join(format!("just-print-job-{}.ipp", crate::ids::new_id()));
-        tokio::fs::write(&request_path, request)
-            .await
-            .map_err(|error| CupsError::Spawn(error.to_string()))?;
-        let output = self
-            .run(
-                "ipptool",
-                &[
-                    "-tv",
-                    &self.printer_uri(&printer_id),
-                    &request_path.to_string_lossy(),
-                ],
-            )
-            .await;
-        let _ = tokio::fs::remove_file(&request_path).await;
-        let output = output?;
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        Ok(parse_ipp_job(&stdout, &printer_id, &job_number))
-    }
-
-    async fn find_job_destination(
-        &self,
-        job_id: &str,
-    ) -> Result<Option<(String, String)>, CupsError> {
-        let output = self.run("lpstat", &["-W", "all", "-o"]).await?;
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        for line in stdout.lines() {
-            let Some(key) = line.split_whitespace().next() else {
-                continue;
-            };
-            let Some((printer, job_number)) = split_job_key(key) else {
-                continue;
-            };
-            if job_number == job_id || format!("{printer}-{job_number}") == job_id {
-                return Ok(Some((printer, job_number)));
-            }
+        let detail = if message.is_empty() {
+            status.to_string()
+        } else {
+            message.to_string()
+        };
+        match status {
+            ClientErrorNotFound | ClientErrorGone => Self::NotFound,
+            ClientErrorBadRequest
+            | ClientErrorAttributesOrValuesNotSupported
+            | ClientErrorConflictingAttributes
+            | ClientErrorDocumentFormatNotSupported
+            | ClientErrorDocumentFormatError
+            | ClientErrorRequestValueTooLong => Self::Invalid(detail),
+            ServerErrorNotAcceptingJobs
+            | ServerErrorBusy
+            | ServerErrorTemporaryError
+            | ServerErrorServiceUnavailable
+            | ServerErrorDeviceError => Self::PrinterUnavailable(detail),
+            _ => Self::Protocol(format!("IPP {status}: {detail}")),
         }
-        Ok(None)
-    }
-
-    fn printer_uri(&self, printer: &str) -> String {
-        format!("{}://{}/printers/{printer}", self.scheme, self.server)
-    }
-
-    async fn run(&self, program: &'static str, args: &[&str]) -> Result<Output, CupsError> {
-        let mut command = Command::new(program);
-        command
-            .args(args)
-            .env("CUPS_SERVER", &self.server)
-            .env("CUPS_ENCRYPTION", "IfRequested")
-            .env("LC_ALL", "C")
-            .env("LANG", "C")
-            .env("TZ", "UTC")
-            .kill_on_drop(true);
-        let started = std::time::Instant::now();
-        debug!(program, args = %args.join(" "), "执行 CUPS 命令");
-        let output = tokio::time::timeout(self.timeout, command.output())
-            .await
-            .map_err(|_| CupsError::Timeout(program))?
-            .map_err(|error| CupsError::Spawn(error.to_string()))?;
-        debug!(
-            program,
-            elapsed_ms = started.elapsed().as_millis(),
-            "CUPS 命令完成"
-        );
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-            return Err(CupsError::Command { program, stderr });
-        }
-        Ok(output)
     }
 }
 
-/// CUPS 打印机基本信息。
+impl From<IppError> for CupsError {
+    fn from(error: IppError) -> Self {
+        match error {
+            IppError::StatusError(status) => Self::from_status(status, ""),
+            IppError::AsyncClientError(error) => {
+                if error.is_timeout() {
+                    Self::Timeout
+                } else {
+                    Self::Unavailable(error.to_string())
+                }
+            }
+            IppError::RequestError(code) => Self::Protocol(format!("IPP 服务返回 HTTP {code}")),
+            IppError::PrinterNotReady => Self::PrinterUnavailable("打印机未就绪".to_string()),
+            other => Self::Protocol(other.to_string()),
+        }
+    }
+}
+
+impl From<ipp::parser::IppParseError> for CupsError {
+    fn from(error: ipp::parser::IppParseError) -> Self {
+        Self::Protocol(error.to_string())
+    }
+}
+
+/// 对外暴露的打印机状态。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum PrinterStateView {
+    /// 空闲。
+    Idle,
+    /// 打印中。
+    Printing,
+    /// 已停止。
+    Stopped,
+    /// 已禁用（拒绝新任务）。
+    Disabled,
+}
+
+/// CUPS 打印机及其可用选项。
 #[derive(Debug, Clone)]
 pub struct PrinterInfo {
-    /// CUPS 打印机名（同时也是提交任务时的 `printer_id`）。
+    /// CUPS 打印机名（也是提交任务时的 `printer_id`）。
     pub name: String,
-    /// 打印机状态（`idle` / `printing` / `disabled` / `stopped`）。
-    pub state: String,
-    /// PPD 或配置中的描述；缺失时为 `None`。
-    pub description: Option<String>,
-}
-
-/// 暴露给前端的单个 CUPS 选项。
-#[derive(Debug, Clone, Serialize)]
-pub struct OptionSpec {
-    /// 选项默认值（CUPS 以 `*` 标记；范围选项通常无标记）。
-    pub default: Option<String>,
-    /// 选项取值类型与合法范围。
-    #[serde(flatten)]
-    pub kind: OptionKind,
-}
-
-/// CUPS 选项取值类型。
-#[derive(Debug, Clone, Serialize)]
-#[serde(tag = "kind", rename_all = "lowercase")]
-pub enum OptionKind {
-    /// 枚举值列表。
-    Enumerated {
-        /// 合法取值。
-        values: Vec<String>,
-    },
-    /// 整数范围。
-    Range {
-        /// 最小值。
-        min: i64,
-        /// 最大值。
-        max: i64,
-    },
+    /// 展示名称（优先使用 `printer-info`）。
+    pub display_name: String,
+    /// 打印机状态。
+    pub state: PrinterStateView,
+    /// 是否接受新任务。
+    pub accepting_jobs: bool,
+    /// 厂商与型号。
+    pub make_and_model: Option<String>,
+    /// 物理位置。
+    pub location: Option<String>,
+    /// 可用的 job 模板选项（标准 IPP 属性名）。
+    pub options: BTreeMap<String, OptionSpec>,
+    /// 读取选项失败时的错误信息；成功时为 `None`。
+    pub options_error: Option<String>,
 }
 
 /// CUPS 任务状态。
@@ -252,412 +162,989 @@ pub enum JobStatus {
     Printing,
     /// 已完成。
     Completed,
-    /// 失败（aborted / stopped）。
+    /// 失败。
     Failed,
     /// 已取消。
     Canceled,
 }
 
 /// CUPS 任务视图。
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone)]
 pub struct JobInfo {
-    /// CUPS 任务 id（`printer-job` 形式）。
-    pub id: String,
     /// 目标打印机名。
     pub printer_id: String,
+    /// CUPS 任务号（打印机内唯一）。
+    pub cups_job_id: i32,
+    /// 任务名（通常为文件名）。
+    pub name: Option<String>,
     /// 当前状态。
     pub status: JobStatus,
-    /// 失败/取消原因；其它状态为 `None`。
+    /// 失败/取消原因。
     pub error: Option<String>,
-    /// 创建时间（Unix 毫秒）。
+    /// 创建时间（Unix 毫秒，UTC）。
     pub created_at_ms: u64,
 }
 
-fn parse_printers(output: &str) -> Result<Vec<PrinterInfo>, String> {
-    let mut printers: Vec<PrinterInfo> = Vec::new();
-    for line in output.lines() {
-        let trimmed = line.trim();
-        if let Some(rest) = trimmed.strip_prefix("printer ") {
-            // lpstat -p 的行有几种形态：
-            //   printer NAME is idle.  enabled since ...
-            //   printer NAME now printing NAME-123.  enabled since ...
-            //   printer NAME disabled since ... / stopped since ...
-            let mut words = rest.split_whitespace();
-            let name = words.next().unwrap_or_default().to_string();
-            let state = match words.next() {
-                Some("is" | "now") => words.next(),
-                Some(other) => Some(other),
-                None => None,
-            }
-            .unwrap_or("unknown")
-            .trim_end_matches('.')
-            .to_string();
-            printers.push(PrinterInfo {
-                name,
-                state,
-                description: None,
-            });
-        } else if let Some(description) = trimmed.strip_prefix("Description:")
-            && let Some(printer) = printers.last_mut()
-        {
-            printer.description = Some(description.trim().to_string());
-        }
+impl JobInfo {
+    /// 稳定的应用层任务 id：`<printer>-<job-id>`。
+    #[must_use]
+    pub fn id(&self) -> String {
+        format!("{}-{}", self.printer_id, self.cups_job_id)
     }
-    if printers.is_empty() {
-        return Err("lpstat -p -l 未返回任何打印机".to_string());
-    }
-    Ok(printers)
 }
 
-fn parse_options(output: &str) -> BTreeMap<String, OptionSpec> {
-    let mut options = BTreeMap::new();
-    for line in output.lines() {
-        let line = line.trim();
-        if line.is_empty() {
-            continue;
+/// 带时间戳的缓存项。
+#[derive(Debug)]
+struct Cached<T> {
+    value: T,
+    at: Instant,
+}
+
+/// IPP 客户端（带缓存与 singleflight）。
+#[derive(Debug)]
+pub struct CupsClient {
+    scheme: String,
+    server: String,
+    base: Uri,
+    timeout: Duration,
+    printer_ttl: Duration,
+    job_ttl: Duration,
+    printers: RwLock<Option<Cached<Arc<Vec<PrinterInfo>>>>>,
+    refresh: Mutex<()>,
+    jobs: Mutex<HashMap<String, Cached<Option<JobInfo>>>>,
+}
+
+impl CupsClient {
+    /// 创建 IPP 客户端。
+    ///
+    /// `server` 为 `host:port`，`scheme` 为 `ipp` / `ipps`。
+    ///
+    /// # Errors
+    ///
+    /// scheme 不受支持或地址无法解析为 URI 时返回 [`CupsError`]。
+    pub fn new(
+        server: String,
+        scheme: String,
+        timeout: Duration,
+        printer_ttl: Duration,
+        job_ttl: Duration,
+    ) -> Result<Self, CupsError> {
+        if scheme != "ipp" && scheme != "ipps" {
+            return Err(CupsError::Protocol(format!(
+                "不支持的 CUPS scheme: {scheme}"
+            )));
         }
-        let Some((name_part, value_part)) = line.split_once(':') else {
-            continue;
+        let base = format!("{scheme}://{server}/")
+            .parse::<Uri>()
+            .map_err(|error| CupsError::Protocol(error.to_string()))?;
+        Ok(Self {
+            scheme,
+            server,
+            base,
+            timeout,
+            printer_ttl,
+            job_ttl,
+            printers: RwLock::new(None),
+            refresh: Mutex::new(()),
+            jobs: Mutex::new(HashMap::new()),
+        })
+    }
+
+    /// 列出打印机（带缓存与 singleflight）。
+    ///
+    /// # Errors
+    ///
+    /// CUPS 不可达、超时或返回协议错误时返回 [`CupsError`]。
+    pub async fn list_printers(&self) -> Result<Arc<Vec<PrinterInfo>>, CupsError> {
+        if let Some(hit) = self.cached_printers().await {
+            return Ok(hit);
+        }
+        let _guard = self.refresh.lock().await;
+        if let Some(hit) = self.cached_printers().await {
+            return Ok(hit);
+        }
+        let printers = Arc::new(self.fetch_printers().await?);
+        *self.printers.write().await = Some(Cached {
+            value: Arc::clone(&printers),
+            at: Instant::now(),
+        });
+        Ok(printers)
+    }
+
+    /// 在缓存快照中查找打印机。
+    ///
+    /// # Errors
+    ///
+    /// 同 [`CupsClient::list_printers`]。
+    pub async fn find_printer(&self, name: &str) -> Result<Option<PrinterInfo>, CupsError> {
+        let printers = self.list_printers().await?;
+        Ok(printers
+            .iter()
+            .find(|printer| printer.name == name)
+            .cloned())
+    }
+
+    /// 提交打印任务。
+    ///
+    /// `job_title` 会作为 IPP `job-name` 提交（自动截断到 255 字节以内）。
+    ///
+    /// # Errors
+    ///
+    /// 文件无法读取、IPP 提交失败或响应缺少 `job-id` 时返回 [`CupsError`]。
+    pub async fn submit(
+        &self,
+        printer: &PrinterInfo,
+        file: &Path,
+        job_title: &str,
+        attributes: Vec<IppAttribute>,
+    ) -> Result<JobInfo, CupsError> {
+        let uri = self.printer_uri(&printer.name)?;
+        let handle = tokio::fs::File::open(file)
+            .await
+            .map_err(|error| CupsError::Protocol(format!("打开待打印文件失败: {error}")))?;
+        let payload = IppPayload::new_async(handle.compat());
+        let operation = IppOperationBuilder::print_job(uri.clone(), payload)
+            .job_title(truncate_name(job_title))
+            .user_name(CUPS_USER)
+            .document_format(APPLICATION_PDF)
+            .attributes(attributes)
+            .build()
+            .map_err(CupsError::from)?;
+        let response = self.send(operation, &uri, "print-job").await?;
+        let job_id = job_id_from_response(&response)
+            .ok_or_else(|| CupsError::Protocol("Print-Job 响应缺少 job-id".to_string()))?;
+        Ok(job_from_groups(
+            &printer.name,
+            job_id,
+            response.attributes().first_of(DelimiterTag::JobAttributes),
+        ))
+    }
+
+    /// 查询单个任务状态；任务不存在时返回 `None`。
+    ///
+    /// # Errors
+    ///
+    /// CUPS 不可达、超时或协议错误时返回 [`CupsError`]。
+    pub async fn job_status(
+        &self,
+        printer_name: &str,
+        cups_job_id: i32,
+    ) -> Result<Option<JobInfo>, CupsError> {
+        let key = format!("{printer_name}-{cups_job_id}");
+        if let Some(cached) = self.cached_job(&key).await {
+            return Ok(cached);
+        }
+        let uri = self.printer_uri(printer_name)?;
+        let operation = IppOperationBuilder::get_job_attributes(uri.clone(), cups_job_id)
+            .build()
+            .map_err(CupsError::from)?;
+        let info = match self.send(operation, &uri, "get-job-attributes").await {
+            Ok(response) => Some(job_from_groups(
+                printer_name,
+                cups_job_id,
+                response.attributes().first_of(DelimiterTag::JobAttributes),
+            )),
+            Err(CupsError::NotFound) => None,
+            Err(error) => return Err(error),
         };
-        let name = name_part
-            .split('/')
-            .next()
-            .unwrap_or(name_part)
-            .trim()
-            .to_string();
-        if name.is_empty() || value_part.trim().is_empty() {
-            continue;
-        }
-        let choices = split_choices(value_part);
-        if choices.is_empty() {
-            continue;
-        }
-
-        if let Some((value, is_default)) = choices.first() {
-            let value = value.as_str();
-            let is_default = *is_default;
-            if let Some((min, max)) = parse_range(value) {
-                let default = is_default.then(|| value.to_string());
-                options.insert(
-                    name,
-                    OptionSpec {
-                        default,
-                        kind: OptionKind::Range { min, max },
-                    },
-                );
-                continue;
-            }
-        }
-
-        let mut values = Vec::with_capacity(choices.len());
-        let mut default = None;
-        for (value, is_default) in choices {
-            if is_default {
-                default = Some(value.clone());
-            }
-            values.push(value);
-        }
-        options.insert(
-            name,
-            OptionSpec {
-                default,
-                kind: OptionKind::Enumerated { values },
+        self.jobs.lock().await.insert(
+            key,
+            Cached {
+                value: info.clone(),
+                at: Instant::now(),
             },
         );
+        Ok(info)
     }
-    options
-}
 
-fn split_choices(value: &str) -> Vec<(String, bool)> {
-    let mut result = Vec::new();
-    let mut current = String::new();
-    let mut in_quotes = false;
-    let mut is_default = false;
-    for ch in value.chars() {
-        match ch {
-            '"' => in_quotes = !in_quotes,
-            ch if ch.is_whitespace() && !in_quotes => {
-                if !current.is_empty() {
-                    result.push((std::mem::take(&mut current), is_default));
-                    is_default = false;
+    /// 列出打印机上的任务（含已完成历史，用于提交失败后的对账）。
+    ///
+    /// # Errors
+    ///
+    /// CUPS 不可达、超时或协议错误时返回 [`CupsError`]。
+    pub async fn list_jobs(&self, printer_name: &str) -> Result<Vec<JobInfo>, CupsError> {
+        let uri = self.printer_uri(printer_name)?;
+        let mut request =
+            IppRequestResponse::new(IppVersion::v1_1(), Operation::GetJobs, Some(uri.clone()))
+                .map_err(CupsError::from)?;
+        add_keyword_attribute(&mut request, "which-jobs", "all")?;
+        add_requested_attributes(
+            &mut request,
+            &[
+                "job-id",
+                "job-name",
+                "job-state",
+                "job-state-reasons",
+                "time-at-creation",
+            ],
+        )?;
+        let response = self.send(request, &uri, "get-jobs").await?;
+        let mut jobs = Vec::new();
+        for group in response.attributes().groups_of(DelimiterTag::JobAttributes) {
+            let Some(job_id) = group_enum(group, "job-id") else {
+                continue;
+            };
+            jobs.push(job_from_group(printer_name, job_id, group));
+        }
+        Ok(jobs)
+    }
+
+    /// 取消任务。
+    ///
+    /// # Errors
+    ///
+    /// CUPS 不可达、超时、任务不存在或拒绝取消时返回 [`CupsError`]。
+    pub async fn cancel_job(&self, printer_name: &str, cups_job_id: i32) -> Result<(), CupsError> {
+        let uri = self.printer_uri(printer_name)?;
+        let operation = IppOperationBuilder::cancel_job(uri.clone(), cups_job_id)
+            .build()
+            .map_err(CupsError::from)?;
+        self.send(operation, &uri, "cancel-job").await?;
+        self.jobs
+            .lock()
+            .await
+            .remove(&format!("{printer_name}-{cups_job_id}"));
+        Ok(())
+    }
+
+    /// 就绪探针：确认 CUPS 能响应 IPP 请求。
+    ///
+    /// # Errors
+    ///
+    /// CUPS 不可达、超时或协议错误时返回 [`CupsError`]。
+    pub async fn ready(&self) -> Result<(), CupsError> {
+        let cups = IppOperationBuilder::cups();
+        self.send(cups.get_printers(), &self.base, "cups-get-printers")
+            .await
+            .map(|_| ())
+    }
+
+    /// 丢弃打印机快照缓存（下一个请求会重新拉取）。
+    pub async fn invalidate_printers(&self) {
+        *self.printers.write().await = None;
+    }
+
+    async fn cached_printers(&self) -> Option<Arc<Vec<PrinterInfo>>> {
+        let guard = self.printers.read().await;
+        let cached = guard.as_ref()?;
+        (cached.at.elapsed() < self.printer_ttl).then(|| Arc::clone(&cached.value))
+    }
+
+    async fn cached_job(&self, key: &str) -> Option<Option<JobInfo>> {
+        let guard = self.jobs.lock().await;
+        let cached = guard.get(key)?;
+        (cached.at.elapsed() < self.job_ttl).then(|| cached.value.clone())
+    }
+
+    async fn fetch_printers(&self) -> Result<Vec<PrinterInfo>, CupsError> {
+        let cups = IppOperationBuilder::cups();
+        let response = self
+            .send(cups.get_printers(), &self.base, "cups-get-printers")
+            .await?;
+        let mut printers = Vec::new();
+        for group in response
+            .attributes()
+            .groups_of(DelimiterTag::PrinterAttributes)
+        {
+            if let Some(printer) = printer_from_group(group) {
+                printers.push(printer);
+            }
+        }
+        for printer in &mut printers {
+            let name = printer.name.clone();
+            match self.fetch_options(&name).await {
+                Ok(options) => printer.options = options,
+                Err(error) => {
+                    warn!(printer = %name, error = %error, "读取打印机选项失败");
+                    printer.options_error = Some(error.to_string());
                 }
             }
-            '*' if current.is_empty() && !in_quotes => is_default = true,
-            ch => current.push(ch),
+        }
+        printers.sort_by(|left, right| left.name.cmp(&right.name));
+        Ok(printers)
+    }
+
+    async fn fetch_options(
+        &self,
+        printer_name: &str,
+    ) -> Result<BTreeMap<String, OptionSpec>, CupsError> {
+        let uri = self.printer_uri(printer_name)?;
+        let operation = IppOperationBuilder::get_printer_attributes(uri.clone())
+            .attributes(options::REQUESTED_ATTRIBUTES)
+            .build()
+            .map_err(CupsError::from)?;
+        let response = self.send(operation, &uri, "get-printer-attributes").await?;
+        Ok(options::parse_options(response.attributes()))
+    }
+
+    fn printer_uri(&self, name: &str) -> Result<Uri, CupsError> {
+        let safe = !name.is_empty()
+            && name
+                .chars()
+                .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_' | '.'));
+        if !safe {
+            return Err(CupsError::Protocol(format!("非法打印机名: {name}")));
+        }
+        format!("{}://{}/printers/{name}", self.scheme, self.server)
+            .parse::<Uri>()
+            .map_err(|error| CupsError::Protocol(error.to_string()))
+    }
+
+    async fn send<R>(
+        &self,
+        request: R,
+        endpoint: &Uri,
+        operation: &'static str,
+    ) -> Result<IppRequestResponse, CupsError>
+    where
+        R: Into<IppRequestResponse>,
+    {
+        let client = AsyncIppClient::builder(endpoint.clone())
+            .request_timeout(self.timeout)
+            .build();
+        let started = Instant::now();
+        debug!(operation, uri = %endpoint, "发送 IPP 请求");
+        let result = client.send(request).await;
+        let elapsed_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
+        match result {
+            Ok(response) => {
+                let status = response.header().status_code();
+                debug!(operation, elapsed_ms, status = %status, "IPP 请求完成");
+                if status.is_success() {
+                    Ok(response)
+                } else {
+                    let message = status_message(&response);
+                    Err(CupsError::from_status(status, &message))
+                }
+            }
+            Err(error) => {
+                debug!(operation, elapsed_ms, error = %error, "IPP 请求失败");
+                Err(CupsError::from(error))
+            }
         }
     }
-    if !current.is_empty() {
-        result.push((current, is_default));
+}
+
+fn status_message(response: &IppRequestResponse) -> String {
+    response
+        .attributes()
+        .first_of(DelimiterTag::OperationAttributes)
+        .and_then(|group| group.get("status-message"))
+        .and_then(|attribute| first_string(attribute.value()))
+        .unwrap_or_default()
+}
+
+fn add_keyword_attribute(
+    request: &mut IppRequestResponse,
+    name: &str,
+    value: &str,
+) -> Result<(), CupsError> {
+    let attribute = IppAttribute::with_name(name, IppValue::new_keyword(value)?)?;
+    request
+        .attributes_mut()
+        .add(DelimiterTag::OperationAttributes, attribute);
+    Ok(())
+}
+
+fn add_requested_attributes(
+    request: &mut IppRequestResponse,
+    names: &[&str],
+) -> Result<(), CupsError> {
+    let values = names
+        .iter()
+        .map(|name| IppValue::new_keyword(*name))
+        .collect::<Result<Vec<_>, _>>()?;
+    let attribute = IppAttribute::with_name("requested-attributes", IppValue::Array(values))?;
+    request
+        .attributes_mut()
+        .add(DelimiterTag::OperationAttributes, attribute);
+    Ok(())
+}
+
+fn printer_from_group(group: &IppAttributeGroup) -> Option<PrinterInfo> {
+    let name = group_str(group, "printer-name")?;
+    let accepting_jobs = group_bool(group, "printer-is-accepting-jobs").unwrap_or(true);
+    let raw_state = group_enum(group, "printer-state").and_then(printer_state);
+    let state = match (raw_state, accepting_jobs) {
+        (Some(PrinterState::Stopped), _) => PrinterStateView::Stopped,
+        (_, false) => PrinterStateView::Disabled,
+        (Some(PrinterState::Processing), _) => PrinterStateView::Printing,
+        _ => PrinterStateView::Idle,
+    };
+    Some(PrinterInfo {
+        display_name: group_str(group, "printer-info").unwrap_or_else(|| name.clone()),
+        name,
+        state,
+        accepting_jobs,
+        make_and_model: group_str(group, "printer-make-and-model"),
+        location: group_str(group, "printer-location"),
+        options: BTreeMap::new(),
+        options_error: None,
+    })
+}
+
+fn printer_state(value: i32) -> Option<PrinterState> {
+    match value {
+        3 => Some(PrinterState::Idle),
+        4 => Some(PrinterState::Processing),
+        5 => Some(PrinterState::Stopped),
+        _ => None,
     }
-    result
 }
 
-fn parse_range(value: &str) -> Option<(i64, i64)> {
-    let (min, max) = value.split_once('-')?;
-    let min = min.parse::<i64>().ok()?;
-    let max = max.parse::<i64>().ok()?;
-    (min <= max).then_some((min, max))
+fn job_id_from_response(response: &IppRequestResponse) -> Option<i32> {
+    response
+        .attributes()
+        .groups_of(DelimiterTag::JobAttributes)
+        .find_map(|group| group_enum(group, "job-id"))
 }
 
-fn parse_job_id(output: &str) -> Option<String> {
-    let line = output.lines().next()?;
-    let rest = line.strip_prefix("request id is ")?;
-    rest.split_whitespace().next().map(str::to_string)
+fn job_from_groups(
+    printer_name: &str,
+    cups_job_id: i32,
+    group: Option<&IppAttributeGroup>,
+) -> JobInfo {
+    group.map_or_else(
+        || JobInfo {
+            printer_id: printer_name.to_string(),
+            cups_job_id,
+            name: None,
+            status: JobStatus::Queued,
+            error: None,
+            created_at_ms: 0,
+        },
+        |group| job_from_group(printer_name, cups_job_id, group),
+    )
 }
 
-fn split_job_key(key: &str) -> Option<(String, String)> {
-    let index = key.rfind('-')?;
-    let (printer, dash_job) = key.split_at(index);
-    let job = dash_job.strip_prefix('-')?;
-    if printer.is_empty() || !job.chars().all(|ch| ch.is_ascii_digit()) {
-        return None;
-    }
-    Some((printer.to_string(), job.to_string()))
-}
-
-fn map_job_status(state: &str) -> JobStatus {
-    match state {
-        "pending" | "pending-held" => JobStatus::Queued,
-        "processing" | "processing-stopped" => JobStatus::Printing,
-        "completed" => JobStatus::Completed,
-        "canceled" => JobStatus::Canceled,
-        _ => JobStatus::Failed,
-    }
-}
-
-fn parse_ipp_job(output: &str, printer_id: &str, job_number: &str) -> Option<JobInfo> {
-    let mut state = None;
-    let mut reasons = None;
-    let mut created_at_ms = 0;
-    for line in output.lines() {
-        let line = line.trim();
-        if let Some(status) = line.strip_prefix("status-code = ") {
-            if !status.starts_with("successful-ok") {
-                return None;
-            }
-            continue;
-        }
-        let Some((key, value)) = line.split_once('=') else {
-            continue;
-        };
-        let key = key.trim();
-        let value = value.trim();
-        if let Some(name) = key.strip_suffix(" (enum)") {
-            if name.trim() == "job-state" {
-                state = Some(value.to_string());
-            }
-        } else if let Some(name) = key.strip_suffix(" (keyword)") {
-            if name.trim() == "job-state-reasons" {
-                reasons = Some(value.to_string());
-            }
-        } else if let Some(name) = key.strip_suffix(" (integer)")
-            && name.trim() == "time-at-creation"
-            && let Ok(seconds) = value.parse::<u64>()
-        {
-            created_at_ms = seconds.saturating_mul(1000);
-        }
-    }
-    let status = state.as_deref().map_or(JobStatus::Failed, map_job_status);
+fn job_from_group(printer_name: &str, cups_job_id: i32, group: &IppAttributeGroup) -> JobInfo {
+    let status = group_enum(group, "job-state")
+        .and_then(job_state)
+        .map_or(JobStatus::Queued, map_job_state);
+    let reasons = group_keywords(group, "job-state-reasons");
     let error = match status {
         JobStatus::Failed | JobStatus::Canceled => {
-            reasons.filter(|value| value != "none" && !value.is_empty())
+            let joined = reasons
+                .iter()
+                .filter(|reason| reason.as_str() != "none" && !reason.is_empty())
+                .cloned()
+                .collect::<Vec<_>>()
+                .join(", ");
+            (!joined.is_empty()).then_some(joined)
         }
         _ => None,
     };
-    Some(JobInfo {
-        id: format!("{printer_id}-{job_number}"),
-        printer_id: printer_id.to_string(),
+    JobInfo {
+        printer_id: printer_name.to_string(),
+        cups_job_id,
+        name: group_str(group, "job-name"),
         status,
         error,
-        created_at_ms,
-    })
+        created_at_ms: group_enum(group, "time-at-creation")
+            .and_then(|seconds| u64::try_from(seconds).ok())
+            .map_or(0, |seconds| seconds.saturating_mul(1000)),
+    }
+}
+
+fn map_job_state(state: JobState) -> JobStatus {
+    match state {
+        JobState::Pending | JobState::PendingHeld => JobStatus::Queued,
+        JobState::Processing | JobState::ProcessingStopped => JobStatus::Printing,
+        JobState::Completed => JobStatus::Completed,
+        JobState::Canceled => JobStatus::Canceled,
+        JobState::Aborted => JobStatus::Failed,
+    }
+}
+
+fn group_value<'a>(group: &'a IppAttributeGroup, name: &str) -> Option<&'a IppValue> {
+    group.get(name).map(IppAttribute::value)
+}
+
+fn group_str(group: &IppAttributeGroup, name: &str) -> Option<String> {
+    group_value(group, name).and_then(first_string)
+}
+
+fn group_enum(group: &IppAttributeGroup, name: &str) -> Option<i32> {
+    match group_value(group, name)? {
+        IppValue::Enum(value) | IppValue::Integer(value) => Some(*value),
+        _ => None,
+    }
+}
+
+fn group_bool(group: &IppAttributeGroup, name: &str) -> Option<bool> {
+    match group_value(group, name)? {
+        IppValue::Boolean(value) => Some(*value),
+        _ => None,
+    }
+}
+
+fn group_keywords(group: &IppAttributeGroup, name: &str) -> Vec<String> {
+    group_value(group, name).map_or_else(Vec::new, collect_keywords)
+}
+
+fn collect_keywords(value: &IppValue) -> Vec<String> {
+    match value {
+        IppValue::Array(items) => items.iter().flat_map(collect_keywords).collect(),
+        IppValue::Keyword(item) => vec![item.as_str().to_string()],
+        _ => Vec::new(),
+    }
+}
+
+fn first_string(value: &IppValue) -> Option<String> {
+    match value {
+        IppValue::Keyword(item)
+        | IppValue::NameWithoutLanguage(item)
+        | IppValue::MimeMediaType(item) => Some(item.as_str().to_string()),
+        IppValue::TextWithoutLanguage(item) => Some(item.to_string()),
+        IppValue::TextWithLanguage { text, .. } => Some(text.to_string()),
+        IppValue::Uri(item) | IppValue::UriScheme(item) => Some(item.as_str().to_string()),
+        IppValue::NaturalLanguage(item) | IppValue::Charset(item) => {
+            Some(item.as_str().to_string())
+        }
+        _ => None,
+    }
+}
+
+/// 把 `job-name` 截断到 IPP 规定的 255 字节以内（按 UTF-8 边界）。
+fn truncate_name(value: &str) -> String {
+    const MAX: usize = 255;
+    if value.len() <= MAX {
+        return value.to_string();
+    }
+    let mut end = MAX;
+    while end > 0 && !value.is_char_boundary(end) {
+        end -= 1;
+    }
+    value.get(..end).unwrap_or(value).to_string()
+}
+
+/// 将 IPP `job-state` 数值映射为 [`JobState`]。
+fn job_state(value: i32) -> Option<JobState> {
+    match value {
+        3 => Some(JobState::Pending),
+        4 => Some(JobState::PendingHeld),
+        5 => Some(JobState::Processing),
+        6 => Some(JobState::ProcessingStopped),
+        7 => Some(JobState::Canceled),
+        8 => Some(JobState::Aborted),
+        9 => Some(JobState::Completed),
+        _ => None,
+    }
 }
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeMap;
+
+    use ipp::attribute::{IppAttribute, IppAttributes};
+    use ipp::model::{DelimiterTag, Operation};
+    use ipp::operation::IppOperation as _;
+    use ipp::operation::builder::IppOperationBuilder;
+    use ipp::parser::IppParser;
+    use ipp::payload::IppPayload;
+    use ipp::prelude::Uri;
+    use ipp::value::IppValue;
+
+    use super::options::{EnumValue, OptionKind, OptionSpec, ResolutionValue};
     use super::{
-        JobStatus, OptionKind, parse_ipp_job, parse_job_id, parse_options, parse_printers,
-        split_choices, split_job_key,
+        JobStatus, PrinterStateView, encode_job_attributes, job_from_group, printer_from_group,
+        truncate_name,
     };
 
-    #[test]
-    fn parses_lpstat_printer_blocks() {
-        let output = "\
-printer PDF is idle.  enabled since Tue 04 Aug 2026 16:20:00 UTC
-\tDescription: CUPS-PDF Printer
-\tLocation: Local
-\tDriver: cups-pdf (grayscale, 2-sided printing)
-\tConnection: direct
-\tDefaults: media=iso_a4_210x297mm sides=one-sided
+    fn attrs(items: Vec<(&str, IppValue)>) -> IppAttributes {
+        let mut attributes = IppAttributes::new();
+        for (name, value) in items {
+            if let Ok(attribute) = IppAttribute::with_name(name, value) {
+                attributes.add(DelimiterTag::PrinterAttributes, attribute);
+            }
+        }
+        attributes
+    }
 
-printer Office is printing.  enabled since Mon 03 Aug 2026 08:00:00 UTC
-\tDescription: Network Office Printer
-\tConnection: ipp://office.local:631/ipp/print
-";
-        let result = parse_printers(output);
-        assert!(result.is_ok());
-        let Ok(printers) = result else {
+    fn group(items: Vec<(&str, IppValue)>) -> IppAttributes {
+        attrs(items)
+    }
+
+    #[test]
+    fn parses_printer_group() {
+        let attributes = group(vec![
+            (
+                "printer-name",
+                IppValue::new_keyword("CUPS-PDF").unwrap_or(IppValue::NoValue),
+            ),
+            (
+                "printer-info",
+                IppValue::new_text_without_language("CUPS-PDF Printer")
+                    .unwrap_or(IppValue::NoValue),
+            ),
+            (
+                "printer-state",
+                IppValue::new_enum(3).unwrap_or(IppValue::NoValue),
+            ),
+            ("printer-is-accepting-jobs", IppValue::new_boolean(true)),
+        ]);
+        let Some(group) = attributes.first_of(DelimiterTag::PrinterAttributes) else {
             return;
         };
-        assert_eq!(printers.len(), 2);
-        let first = printers.first();
-        assert!(first.is_some());
-        if let Some(first) = first {
-            assert_eq!(first.name, "PDF");
-            assert_eq!(first.state, "idle");
-            assert_eq!(first.description.as_deref(), Some("CUPS-PDF Printer"));
-        }
-        let second = printers.get(1);
-        assert!(second.is_some());
-        if let Some(second) = second {
-            assert_eq!(second.state, "printing");
+        let printer = printer_from_group(group);
+        assert!(printer.is_some());
+        if let Some(printer) = printer {
+            assert_eq!(printer.name, "CUPS-PDF");
+            assert_eq!(printer.display_name, "CUPS-PDF Printer");
+            assert_eq!(printer.state, PrinterStateView::Idle);
+            assert!(printer.accepting_jobs);
         }
     }
 
     #[test]
-    fn parses_now_printing_disabled_and_stopped_states() {
-        let output = "\
-printer usb-lj4000d-00000lp05609863 now printing usb-lj4000d-00000lp05609863-2. enabled since Wed Aug 5 11:30:50 2026
-\tDescription: LJ4000D via USB
-
-printer Office disabled since Mon 03 Aug 2026 08:00:00 UTC
-\tDescription: Network Office Printer
-
-printer Label stopped since Mon 03 Aug 2026 08:00:00 UTC
-\tDescription: Label Printer
-";
-        let result = parse_printers(output);
-        assert!(result.is_ok());
-        let Ok(printers) = result else {
+    fn maps_rejecting_printer_to_disabled() {
+        let attributes = group(vec![
+            (
+                "printer-name",
+                IppValue::new_keyword("PDF").unwrap_or(IppValue::NoValue),
+            ),
+            (
+                "printer-state",
+                IppValue::new_enum(3).unwrap_or(IppValue::NoValue),
+            ),
+            ("printer-is-accepting-jobs", IppValue::new_boolean(false)),
+        ]);
+        let Some(group) = attributes.first_of(DelimiterTag::PrinterAttributes) else {
             return;
         };
-        assert_eq!(printers.len(), 3);
-        let first = printers.first();
-        assert!(first.is_some());
-        if let Some(first) = first {
-            assert_eq!(first.name, "usb-lj4000d-00000lp05609863");
-            assert_eq!(first.state, "printing");
-        }
-        let second = printers.get(1);
-        assert!(second.is_some());
-        if let Some(second) = second {
-            assert_eq!(second.state, "disabled");
-        }
-        let third = printers.get(2);
-        assert!(third.is_some());
-        if let Some(third) = third {
-            assert_eq!(third.state, "stopped");
-        }
-    }
-
-    #[test]
-    fn parses_lpoptions_enumerated_and_ranges() {
-        let output = "\
-PageSize/Page Size: *Letter A4 A5 \"Plain Paper\"
-copies/Copies: 1-9999
-Duplex/Duplex Printing: DuplexTumble DuplexNoTumble *None
-";
-        let options = parse_options(output);
-        let page_size = options.get("PageSize");
-        assert!(page_size.is_some());
-        if let Some(page_size) = page_size {
-            assert_eq!(page_size.default.as_deref(), Some("Letter"));
-            assert!(matches!(
-                &page_size.kind,
-                OptionKind::Enumerated { values } if values.len() == 4
-            ));
-        }
-        let copies = options.get("copies");
-        assert!(copies.is_some());
-        if let Some(copies) = copies {
-            assert!(matches!(
-                &copies.kind,
-                OptionKind::Range { min: 1, max: 9999 }
-            ));
-        }
-        let duplex = options.get("Duplex");
-        assert!(duplex.is_some());
-        if let Some(duplex) = duplex {
-            assert_eq!(duplex.default.as_deref(), Some("None"));
-        }
-    }
-
-    #[test]
-    fn split_choices_handles_quotes_and_default_markers() {
         assert_eq!(
-            split_choices("*A4 \"Plain Paper\" 11x17"),
-            vec![
-                ("A4".to_string(), true),
-                ("Plain Paper".to_string(), false),
-                ("11x17".to_string(), false),
-            ]
+            printer_from_group(group).map(|printer| printer.state),
+            Some(PrinterStateView::Disabled)
         );
     }
 
     #[test]
-    fn parses_lp_job_id() {
-        assert_eq!(
-            parse_job_id("request id is PDF-8 (1 file(s))\n").as_deref(),
-            Some("PDF-8")
-        );
-    }
-
-    #[test]
-    fn parses_ipp_job_attributes() {
-        let output = "\
-        status-code = successful-ok (successful-ok)
-        job-state (enum) = completed
-        job-state-reasons (keyword) = processing-to-stop-point
-        time-at-creation (integer) = 1785833607
-";
-        let Some(job) = parse_ipp_job(output, "PDF", "8") else {
+    fn parses_job_group() {
+        let attributes = group(vec![
+            ("job-id", IppValue::new_integer(8)),
+            (
+                "job-name",
+                IppValue::new_name_without_language("report.pdf").unwrap_or(IppValue::NoValue),
+            ),
+            (
+                "job-state",
+                IppValue::new_enum(9).unwrap_or(IppValue::NoValue),
+            ),
+            ("time-at-creation", IppValue::new_integer(1_785_833_607)),
+        ]);
+        let Some(group) = attributes.first_of(DelimiterTag::PrinterAttributes) else {
             return;
         };
-        assert_eq!(job.id, "PDF-8");
-        assert_eq!(job.printer_id, "PDF");
+        let job = job_from_group("CUPS-PDF", 8, group);
+        assert_eq!(job.id(), "CUPS-PDF-8");
+        assert_eq!(job.name.as_deref(), Some("report.pdf"));
         assert_eq!(job.status, JobStatus::Completed);
-        assert!(job.error.is_none());
         assert_eq!(job.created_at_ms, 1_785_833_607_000);
     }
 
     #[test]
-    fn parses_failed_and_canceled_ipp_jobs() {
-        let failed = "\
-        status-code = successful-ok (successful-ok)
-        job-state (enum) = aborted
-        job-state-reasons (keyword) = job-hold-until-specified
-";
-        let Some(job) = parse_ipp_job(failed, "PDF", "6") else {
-            return;
-        };
-        assert_eq!(job.status, JobStatus::Failed);
-        assert_eq!(job.error.as_deref(), Some("job-hold-until-specified"));
+    fn truncates_long_job_names_on_char_boundary() {
+        let long = "文".repeat(200);
+        let truncated = truncate_name(&long);
+        assert!(truncated.len() <= 255);
+        assert!(truncated.is_char_boundary(truncated.len()));
+    }
 
-        let canceled = "\
-        status-code = successful-ok (successful-ok)
-        job-state (enum) = canceled
-        job-state-reasons (keyword) = job-canceled-by-user
-";
-        let Some(job) = parse_ipp_job(canceled, "PDF", "5") else {
-            return;
-        };
-        assert_eq!(job.status, JobStatus::Canceled);
+    fn spec(kind: OptionKind) -> OptionSpec {
+        OptionSpec {
+            default: None,
+            kind,
+        }
     }
 
     #[test]
-    fn ipp_not_found_returns_none() {
-        let output = "\
-        status-code = client-error-not-found (Job #999 does not exist.)
-";
-        assert!(parse_ipp_job(output, "PDF", "999").is_none());
-    }
-
-    #[test]
-    fn job_key_split_handles_hyphenated_printer_names() {
-        let result = split_job_key("My-Office-PDF-12");
-        assert_eq!(
-            result,
-            Some(("My-Office-PDF".to_string(), "12".to_string()))
+    fn print_job_request_carries_encoded_job_attributes() {
+        let Ok(uri) = "ipp://127.0.0.1:631/printers/PDF".parse::<Uri>() else {
+            return;
+        };
+        let mut catalog = BTreeMap::new();
+        catalog.insert(
+            "media".to_string(),
+            spec(OptionKind::Keyword {
+                values: vec!["iso_a4_210x297mm".to_string()],
+            }),
         );
+        catalog.insert(
+            "copies".to_string(),
+            spec(OptionKind::Integer { min: 1, max: 99 }),
+        );
+        catalog.insert(
+            "print-quality".to_string(),
+            spec(OptionKind::Enum {
+                values: vec![EnumValue {
+                    value: 4,
+                    name: "normal".to_string(),
+                }],
+            }),
+        );
+        catalog.insert(
+            "printer-resolution".to_string(),
+            spec(OptionKind::Resolution {
+                values: vec![ResolutionValue {
+                    cross_feed: 600,
+                    feed: 600,
+                    units: 3,
+                    label: "600x600dpi".to_string(),
+                }],
+            }),
+        );
+
+        let mut requested = BTreeMap::new();
+        requested.insert("media".to_string(), "iso_a4_210x297mm".to_string());
+        requested.insert("copies".to_string(), "2".to_string());
+        requested.insert("print-quality".to_string(), "normal".to_string());
+        requested.insert("printer-resolution".to_string(), "600x600dpi".to_string());
+        let Ok(attributes) = encode_job_attributes(&catalog, &requested) else {
+            return;
+        };
+
+        let payload = IppPayload::new(std::io::Cursor::new(b"%PDF-1.7".to_vec()));
+        let Ok(operation) = IppOperationBuilder::print_job(uri, payload)
+            .job_title("[abcd1234] report.pdf")
+            .user_name("just-print")
+            .document_format(crate::cups::APPLICATION_PDF)
+            .attributes(attributes)
+            .build()
+        else {
+            return;
+        };
+        let bytes = operation.into_ipp_request().to_bytes();
+        let Ok((header, parsed, _reader)) =
+            IppParser::new(std::io::Cursor::new(bytes)).parse_parts()
+        else {
+            return;
+        };
+
+        assert_eq!(header.operation_or_status, Operation::PrintJob as i16);
+        let Some(group) = parsed.first_of(DelimiterTag::JobAttributes) else {
+            return;
+        };
+        assert!(matches!(
+            group.get("media").map(IppAttribute::value),
+            Some(IppValue::Keyword(_))
+        ));
+        assert!(matches!(
+            group.get("copies").map(IppAttribute::value),
+            Some(IppValue::Integer(2))
+        ));
+        assert!(matches!(
+            group.get("print-quality").map(IppAttribute::value),
+            Some(IppValue::Enum(4))
+        ));
+        assert!(matches!(
+            group.get("printer-resolution").map(IppAttribute::value),
+            Some(IppValue::Resolution { .. })
+        ));
+        if let Some(operation_group) = parsed.first_of(DelimiterTag::OperationAttributes) {
+            assert!(operation_group.get("job-name").is_some());
+            assert!(operation_group.get("document-format").is_some());
+            assert!(operation_group.get("requesting-user-name").is_some());
+        }
+    }
+}
+
+/// 用进程内假 IPP 服务端验证客户端真实走线（HTTP + IPP 编解码），
+/// 不依赖 CUPS 或容器环境。
+#[cfg(test)]
+mod ipp_server_tests {
+    use std::collections::BTreeMap;
+    use std::time::Duration;
+
+    use axum::Router;
+    use axum::body::Bytes;
+    use axum::http::{StatusCode as HttpStatus, header};
+    use axum::response::{IntoResponse, Response};
+    use ipp::attribute::IppAttribute;
+    use ipp::model::{DelimiterTag, IppVersion, Operation, StatusCode};
+    use ipp::parser::IppParser;
+    use ipp::prelude::IppRequestResponse;
+    use ipp::value::IppValue;
+    use tokio::net::TcpListener;
+
+    use super::CupsClient;
+
+    fn add_attribute(
+        response: &mut IppRequestResponse,
+        group: DelimiterTag,
+        name: &str,
+        value: IppValue,
+    ) {
+        if let Ok(attribute) = IppAttribute::with_name(name, value) {
+            response.attributes_mut().add(group, attribute);
+        }
+    }
+
+    fn keyword(value: &str) -> IppValue {
+        IppValue::new_keyword(value).unwrap_or(IppValue::NoValue)
+    }
+
+    fn add_printer_attributes(response: &mut IppRequestResponse) {
+        add_attribute(
+            response,
+            DelimiterTag::PrinterAttributes,
+            "printer-name",
+            keyword("FAKE"),
+        );
+        add_attribute(
+            response,
+            DelimiterTag::PrinterAttributes,
+            "printer-info",
+            IppValue::new_text_without_language("Fake Printer").unwrap_or(IppValue::NoValue),
+        );
+        add_attribute(
+            response,
+            DelimiterTag::PrinterAttributes,
+            "printer-state",
+            IppValue::new_enum(3).unwrap_or(IppValue::NoValue),
+        );
+        add_attribute(
+            response,
+            DelimiterTag::PrinterAttributes,
+            "printer-is-accepting-jobs",
+            IppValue::new_boolean(true),
+        );
+        add_attribute(
+            response,
+            DelimiterTag::PrinterAttributes,
+            "media-supported",
+            IppValue::Array(vec![
+                keyword("iso_a4_210x297mm"),
+                keyword("na_letter_8.5x11in"),
+            ]),
+        );
+        add_attribute(
+            response,
+            DelimiterTag::PrinterAttributes,
+            "sides-supported",
+            IppValue::Array(vec![keyword("one-sided"), keyword("two-sided-long-edge")]),
+        );
+    }
+
+    fn add_job_attributes(response: &mut IppRequestResponse) {
+        add_attribute(
+            response,
+            DelimiterTag::JobAttributes,
+            "job-id",
+            IppValue::new_integer(1),
+        );
+        add_attribute(
+            response,
+            DelimiterTag::JobAttributes,
+            "job-name",
+            IppValue::new_name_without_language("[abcd1234] test.pdf").unwrap_or(IppValue::NoValue),
+        );
+        add_attribute(
+            response,
+            DelimiterTag::JobAttributes,
+            "job-state",
+            IppValue::new_enum(9).unwrap_or(IppValue::NoValue),
+        );
+        add_attribute(
+            response,
+            DelimiterTag::JobAttributes,
+            "time-at-creation",
+            IppValue::new_integer(1_785_833_607),
+        );
+    }
+
+    async fn ipp_handler(body: Bytes) -> Response {
+        let Ok(parsed) = IppParser::new(std::io::Cursor::new(body.to_vec())).parse() else {
+            return (HttpStatus::BAD_REQUEST, "parse error").into_response();
+        };
+        let operation = parsed.header().operation_or_status;
+        let Ok(mut response) = IppRequestResponse::new_response(
+            IppVersion::v1_1(),
+            StatusCode::SuccessfulOk,
+            parsed.header().request_id,
+        ) else {
+            return (HttpStatus::INTERNAL_SERVER_ERROR, "build error").into_response();
+        };
+        if operation == Operation::CupsGetPrinters as i16
+            || operation == Operation::GetPrinterAttributes as i16
+        {
+            add_printer_attributes(&mut response);
+        }
+        if operation == Operation::PrintJob as i16
+            || operation == Operation::GetJobAttributes as i16
+            || operation == Operation::GetJobs as i16
+        {
+            add_job_attributes(&mut response);
+        }
+        (
+            [(header::CONTENT_TYPE, "application/ipp")],
+            response.to_bytes(),
+        )
+            .into_response()
+    }
+
+    async fn serve_fake_ipp() -> Option<String> {
+        let listener = TcpListener::bind("127.0.0.1:0").await.ok()?;
+        let addr = listener.local_addr().ok()?;
+        tokio::spawn(async move {
+            let app = Router::new().fallback(ipp_handler);
+            let _ = axum::serve(listener, app).await;
+        });
+        Some(addr.to_string())
+    }
+
+    #[tokio::test]
+    async fn talks_to_an_ipp_server_end_to_end() {
+        let Some(server) = serve_fake_ipp().await else {
+            return;
+        };
+        let Ok(client) = CupsClient::new(
+            server,
+            "ipp".to_string(),
+            Duration::from_secs(5),
+            Duration::from_secs(1),
+            Duration::from_secs(1),
+        ) else {
+            return;
+        };
+
+        let Ok(printers) = client.list_printers().await else {
+            return;
+        };
+        assert_eq!(printers.len(), 1);
+        let Some(printer) = printers.first() else {
+            return;
+        };
+        assert_eq!(printer.name, "FAKE");
+        assert_eq!(printer.display_name, "Fake Printer");
+        assert!(printer.options.contains_key("media"));
+        assert!(printer.options.contains_key("sides"));
+
+        let path = std::env::temp_dir().join(format!("jp-ipp-test-{}.pdf", crate::ids::new_id()));
+        if std::fs::write(&path, b"%PDF-1.7\n").is_err() {
+            return;
+        }
+        let Ok(attributes) = super::encode_job_attributes(&printer.options, &BTreeMap::new())
+        else {
+            return;
+        };
+        let Ok(job) = client.submit(printer, &path, "test.pdf", attributes).await else {
+            return;
+        };
+        assert_eq!(job.id(), "FAKE-1");
+        assert_eq!(job.created_at_ms, 1_785_833_607_000);
+
+        let Ok(Some(status)) = client.job_status("FAKE", 1).await else {
+            return;
+        };
+        assert_eq!(status.name.as_deref(), Some("[abcd1234] test.pdf"));
+
+        let Ok(jobs) = client.list_jobs("FAKE").await else {
+            return;
+        };
+        assert_eq!(jobs.len(), 1);
+
+        assert!(client.cancel_job("FAKE", 1).await.is_ok());
+        assert!(client.ready().await.is_ok());
+        let _ = std::fs::remove_file(&path);
     }
 }

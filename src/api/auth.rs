@@ -11,25 +11,34 @@ use subtle::ConstantTimeEq;
 use crate::error::AppError;
 use crate::state::AppState;
 
-/// 校验 `Authorization: Bearer <token>`；通过后放行请求。
+/// 校验 `Authorization: Bearer <token>`（scheme 大小写不敏感）；通过后放行。
 pub async fn require_auth(
     State(state): State<Arc<AppState>>,
     request: Request,
     next: Next,
 ) -> Result<Response, AppError> {
-    let header = request
-        .headers()
-        .get(AUTHORIZATION)
-        .and_then(|value| value.to_str().ok());
-    let Some(provided) = header.and_then(|value| value.strip_prefix("Bearer ")) else {
-        return Err(AppError::Unauthorized);
-    };
+    let provided = bearer_token(&request);
     let expected = state.config.token.as_bytes();
-    let provided = provided.as_bytes();
-    let matches = provided.len() == expected.len() && expected.ct_eq(provided).into();
-    if matches {
+    let authorized = provided.is_some_and(|provided| {
+        let provided = provided.as_bytes();
+        provided.len() == expected.len() && bool::from(expected.ct_eq(provided))
+    });
+    if authorized {
         Ok(next.run(request).await)
     } else {
+        state.metrics.inc("auth_failures", &[]);
         Err(AppError::Unauthorized)
+    }
+}
+
+/// 从 `Authorization` 头中提取 Bearer 令牌。
+fn bearer_token(request: &Request) -> Option<&str> {
+    let value = request.headers().get(AUTHORIZATION)?.to_str().ok()?;
+    let (scheme, token) = value.split_once(' ')?;
+    let token = token.trim();
+    if scheme.eq_ignore_ascii_case("bearer") && !token.is_empty() {
+        Some(token)
+    } else {
+        None
     }
 }

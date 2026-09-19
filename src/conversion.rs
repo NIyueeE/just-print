@@ -29,9 +29,6 @@ pub const SUPPORTED_EXTENSIONS: [&str; 172] = [
     "xml", "xpm", "zabw", "zip", "zmf",
 ];
 
-/// `LibreOffice` 并发转换上限（`CPU` 密集操作）。
-pub const CONVERSION_SLOTS: usize = 2;
-
 /// 文档转换错误。
 #[derive(Debug, Error)]
 pub enum ConversionError {
@@ -294,6 +291,28 @@ async fn cleanup_artifacts(profile_dir: &Path, intermediate: Option<&Path>, outp
     }
 }
 
+/// 只读取前 5 个字节校验 PDF 魔数，避免把整个大文件读进内存。
+async fn validate_pdf_magic(path: &Path) -> Result<(), ConversionError> {
+    use tokio::io::AsyncReadExt as _;
+
+    let mut file = tokio::fs::File::open(path)
+        .await
+        .map_err(ConversionError::Read)?;
+    let mut magic = [0_u8; 5];
+    match file.read_exact(&mut magic).await {
+        Ok(_) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::UnexpectedEof => {
+            return Err(ConversionError::InvalidPdf);
+        }
+        Err(error) => return Err(ConversionError::Read(error)),
+    }
+    if magic == *b"%PDF-" {
+        Ok(())
+    } else {
+        Err(ConversionError::InvalidPdf)
+    }
+}
+
 /// 将上传文件转换为 PDF。
 ///
 /// `.pdf` 校验 `%PDF-` 魔数后原样返回；其它格式调用
@@ -321,12 +340,7 @@ pub async fn convert_to_pdf(
     }
 
     if extension == "pdf" {
-        let bytes = tokio::fs::read(source)
-            .await
-            .map_err(ConversionError::Read)?;
-        if !bytes.starts_with(b"%PDF-") {
-            return Err(ConversionError::InvalidPdf);
-        }
+        validate_pdf_magic(source).await?;
         return Ok(source.to_path_buf());
     }
 

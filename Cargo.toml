@@ -1,6 +1,6 @@
 [package]
 name = "just-print"
-version = "0.1.0"
+version = "0.3.0"
 edition = "2024"
 description = "A lightweight web service for printing documents via CUPS"
 license = "MIT"
@@ -10,16 +10,19 @@ categories = ["command-line-utilities", "web-programming"]
 
 [dependencies]
 axum = { version = "0.8.9", features = ["multipart", "json", "query", "matched-path"] }
+ipp = "7"
 pulldown-cmark = "0.13"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.151"
 subtle = "2.6.1"
 thiserror = "2.0.19"
 tokio = { version = "1.53", features = ["fs", "io-util", "macros", "net", "process", "rt-multi-thread", "signal", "sync", "time"] }
-tokio-util = { version = "0.7", features = ["io"] }
-tower-http = { version = "0.6", features = ["fs", "trace"] }
+tokio-util = { version = "0.7", features = ["io", "compat"] }
+tower = "0.5"
+tower-http = { version = "0.6", features = ["fs", "request-id", "set-header", "timeout", "trace"] }
 tracing = { version = "0.1.44", default-features = false, features = ["std"] }
 tracing-subscriber = { version = "0.3.23", features = ["env-filter", "fmt"] }
+uuid = { version = "1.26.1", features = ["v4"] }
 
 [dev-dependencies]
 tower = { version = "0.5", features = ["util"] }
@@ -34,6 +37,8 @@ warnings = "deny"
 all = { level = "deny", priority = -1 }
 pedantic = { level = "deny", priority = -1 }
 cargo = { level = "deny", priority = -1 }
+# reqwest/rustls 生态会引入同名依赖的多个版本，应用层无法收敛，显式放行。
+multiple_crate_versions = "allow"
 
 unwrap_used = "deny"
 expect_used = "deny"
