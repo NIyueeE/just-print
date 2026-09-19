@@ -2,8 +2,8 @@
 default:
     @just --list
 
-# 后端 + 前端完整检查
-check: backend frontend
+# 后端 + 前端 + 入口脚本完整检查
+check: backend frontend shell
 
 # 后端完整检查链：格式、静态检查、测试
 backend:
@@ -18,6 +18,11 @@ frontend:
     cd frontend && bun run lint
     cd frontend && bun run test:run
     cd frontend && bun run build
+
+# 入口脚本语法与纯逻辑测试（PPD 匹配、USB 选项解析）
+shell:
+    sh -n container/entrypoint.sh
+    sh container/entrypoint.test.sh
 
 # 依赖安全审计（需要 cargo-audit 与 bun）
 audit:
