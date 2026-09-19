@@ -122,6 +122,23 @@ PPD 里双面受一个**可安装选项**（`Option1` / `OptionDuplex`，人类�
 - 想完全固定驱动，用 `JUST_PRINT_USB_PPD`（驱动 URI 或 PPD 文件路径）。
 - 改完在界面点「刷新」（或请求 `GET /api/printers?refresh=true`）即可看到新能力。
 
+`JUST_PRINT_USB_OPTIONS` 的合法取值**没有固定清单**，它就是 `lpadmin -o key=value`
+的透传，因此由该队列 PPD 的选项决定：
+
+- 查可用的 key/value：`lpoptions -p <队列> -l`，输出形如
+  `Keyword/显示名: *默认值 取值1 取值2`——`/` 前是 key，`:` 后是该选项的全部合法
+  取值（`*` 标记默认值）。也可直接查 PPD：
+  `grep -nE '^\*(OpenUI|Default|Option)' /etc/cups/ppd/<队列>.ppd`。
+- **可安装选项**（ppdc 的 `Installable` 指令生成）固定是布尔，取值只有
+  `False` / `True`：通用 PCL PPD 是 `Option1=False|True`（显示名 Duplexer），
+  HPLIP PPD 是 `OptionDuplex=False|True`（显示名 “Duplexer Installed”）。
+- 其它 PPD 选项同样可传（如 `InputSlot=Tray2`、`PageSize=A4`），但它们大多是
+  作业级默认值；对「解锁硬件能力」起作用的主要是可安装选项。
+- 多个选项用逗号分隔：`JUST_PRINT_USB_OPTIONS=OptionDuplex=True,InputSlot=Tray2`。
+  取值按 PPD 原样拼写（大小写敏感）。
+- 取值写错时：不带 `=` 的条目会被忽略并打 warning；若 `lpadmin` 拒绝该选项，入口
+  脚本会退回「不带任何选项」重新建队列，保证打印机不会因为一个拼写错误而消失。
+
 只有 CUPS 中可见的打印机会出现在 `/api/printers`；前端控制项直接来自 IPP 的
 `*-supported` / `*-default` 打印机属性，而不是 PPD / `lpoptions` 名称或 PJL 能力查询。
 
