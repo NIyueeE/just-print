@@ -6,9 +6,12 @@
 .app-shell {
   --pad-x: var(--space-6);
   --pad-y: calc(var(--space-7) + env(safe-area-inset-top));
+  /* 横屏刘海/圆角：水平安全区必须计入，否则内容会落在屏幕被遮挡的区域。 */
+  --pad-l: calc(var(--pad-x) + env(safe-area-inset-left));
+  --pad-r: calc(var(--pad-x) + env(safe-area-inset-right));
   max-width: 1200px;
   margin: 0 auto;
-  padding: var(--pad-y) var(--pad-x) calc(var(--space-8) + env(safe-area-inset-bottom));
+  padding: var(--pad-y) var(--pad-r) calc(var(--space-8) + env(safe-area-inset-bottom)) var(--pad-l);
 }
 
 /* ---------- 顶栏 ---------- */
@@ -22,8 +25,8 @@
   gap: var(--space-4);
   align-items: center;
   justify-content: space-between;
-  margin: calc(-1 * var(--pad-y)) calc(-1 * var(--pad-x)) var(--space-6);
-  padding: var(--pad-y) var(--pad-x);
+  margin: calc(-1 * var(--pad-y)) calc(-1 * var(--pad-r)) var(--space-6) calc(-1 * var(--pad-l));
+  padding: var(--pad-y) var(--pad-r) var(--pad-y) var(--pad-l);
   background: color-mix(in srgb, var(--color-bg) 84%, transparent);
   border-bottom: 1px solid var(--color-border);
   backdrop-filter: blur(14px) saturate(1.1);
@@ -198,6 +201,7 @@
   align-items: center;
   justify-content: center;
   min-height: var(--control-h-md);
+  max-width: 100%;
   padding: var(--space-2) var(--space-5);
   background: linear-gradient(180deg, var(--color-primary-grad-from), var(--color-primary-grad-to));
   border: 1px solid var(--color-primary-border);
@@ -205,6 +209,9 @@
   box-shadow: var(--shadow-xs);
   color: var(--color-interactive-text);
   font-weight: var(--weight-semibold);
+  /* 按钮文案不允许折行：窄屏上折行会把控件撑成两行高、破坏顶栏对齐。 */
+  text-align: center;
+  white-space: nowrap;
   transition:
     filter var(--duration-fast) var(--ease-standard),
     transform var(--duration-fast) var(--ease-standard),
@@ -232,12 +239,14 @@
   align-items: center;
   justify-content: center;
   min-height: var(--control-h-sm);
+  max-width: 100%;
   padding: var(--space-2) var(--space-3);
   background: transparent;
   border: 1px solid var(--color-border-strong);
   border-radius: var(--radius-sm);
   color: var(--color-muted);
   text-decoration: none;
+  white-space: nowrap;
   transition:
     color var(--transition),
     border-color var(--transition),
@@ -432,10 +441,17 @@
 
   .header-actions {
     width: 100%;
+    justify-content: flex-end;
   }
 
+  /* 只让文案按钮占据剩余空间；图标按钮保持方形。
+     三个按钮都被强制 flex:1 时，「退出登录」只剩 1/3 宽度，文字会折成两行。 */
   .header-actions .ghost {
-    flex: 1;
+    flex: 0 0 auto;
+  }
+
+  .brand {
+    min-width: 0;
   }
 
   .tagline {

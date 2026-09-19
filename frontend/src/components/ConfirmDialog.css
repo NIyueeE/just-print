@@ -5,7 +5,11 @@
   inset: 0;
   z-index: var(--z-modal);
   display: grid;
-  padding: var(--space-4);
+  padding: calc(var(--space-4) + env(safe-area-inset-top))
+    calc(var(--space-4) + env(safe-area-inset-right))
+    calc(var(--space-4) + env(safe-area-inset-bottom))
+    calc(var(--space-4) + env(safe-area-inset-left));
+  overflow: hidden;
   place-items: center;
 }
 
@@ -23,8 +27,11 @@
   flex-direction: column;
   gap: var(--space-4);
   width: min(520px, 100%);
-  max-height: calc(100vh - var(--space-8));
+  /* 相对（已含安全区的）遮罩区域取高度，而不是 100vh：移动端地址栏收放时 100vh
+     大于可视高度，会把底部按钮推到地址栏之后。 */
+  max-height: 100%;
   overflow-y: auto;
+  overscroll-behavior: contain;
   padding: var(--space-6);
   background: var(--color-surface);
   border: 1px solid var(--color-border-strong);
@@ -47,6 +54,7 @@
 }
 
 .dialog__close {
+  position: relative;
   display: inline-flex;
   flex: none;
   align-items: center;
@@ -62,6 +70,13 @@
     color var(--transition),
     background-color var(--transition),
     border-color var(--transition);
+}
+
+/* 视觉尺寸保持紧凑，命中区域扩大到触控友好的范围。 */
+.dialog__close::after {
+  position: absolute;
+  inset: -7px;
+  content: '';
 }
 
 .dialog__close:hover:not(:disabled) {
@@ -106,8 +121,21 @@
 }
 
 @media (max-width: 640px) {
+  .dialog {
+    padding: calc(var(--space-3) + env(safe-area-inset-top))
+      calc(var(--space-3) + env(safe-area-inset-right))
+      calc(var(--space-3) + env(safe-area-inset-bottom))
+      calc(var(--space-3) + env(safe-area-inset-left));
+  }
+
   .dialog__panel {
-    padding: var(--space-5);
+    padding: var(--space-5) var(--space-4);
+  }
+
+  .dialog__close {
+    width: var(--control-h-lg);
+    height: var(--control-h-lg);
+    margin: calc(-1 * var(--space-1));
   }
 
   .dialog__actions {

@@ -151,4 +151,14 @@
   .token-gate__title {
     font-size: var(--text-xl);
   }
+
+  /* 触屏上「显示/隐藏令牌」需要足够大的触控区域，输入框相应让出空间。 */
+  .token-gate__eye {
+    width: var(--control-h-sm);
+    height: var(--control-h-sm);
+  }
+
+  .token-gate__field input {
+    padding-right: calc(var(--control-h-sm) + var(--space-2));
+  }
 }

@@ -1,9 +1,26 @@
 /* 任务状态列表 */
 
 .jobs__counts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0 var(--space-2);
+  align-items: baseline;
   margin-top: var(--space-1);
   color: var(--color-muted);
   font-size: var(--text-sm);
+}
+
+/* 每一项独立成块：窄屏换行发生在统计项之间，而不是「已取消 / 0」这样被拆开。 */
+.jobs__count {
+  display: inline-flex;
+  gap: 0.35em;
+  align-items: baseline;
+  white-space: nowrap;
+}
+
+.jobs__count-value {
+  color: var(--color-text);
+  font-family: var(--font-mono);
 }
 
 .jobs__list {

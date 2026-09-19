@@ -216,11 +216,38 @@ export function JobList() {
         ) : null}
       </div>
 
+      {/* 每个统计项独立成块（flex 布局会忽略块之间的空白文本节点，只影响可访问性文本），
+          窄屏换行发生在统计项之间，而不是把「已取消 0」拆成两行。 */}
       <p class="jobs__counts" aria-live="polite">
-        共 {counts.total} 个 · 进行中 {counts.active} · 已完成 {counts.completed} · 失败{' '}
-        {counts.failed} · 已取消 {counts.canceled}
-        {counts.unknown > 0 ? ` · 已清理 ${counts.unknown}` : ''}
-        {jobs.polling ? ' · 刷新中…' : ''}
+        <span class="jobs__count">
+          共 <span class="jobs__count-value">{counts.total}</span> 个
+        </span>{' '}
+        <span class="jobs__count">
+          进行中 <span class="jobs__count-value">{counts.active}</span>
+        </span>{' '}
+        <span class="jobs__count">
+          已完成 <span class="jobs__count-value">{counts.completed}</span>
+        </span>{' '}
+        <span class="jobs__count">
+          失败 <span class="jobs__count-value">{counts.failed}</span>
+        </span>{' '}
+        <span class="jobs__count">
+          已取消 <span class="jobs__count-value">{counts.canceled}</span>
+        </span>
+        {counts.unknown > 0 ? (
+          <>
+            {' '}
+            <span class="jobs__count">
+              已清理 <span class="jobs__count-value">{counts.unknown}</span>
+            </span>
+          </>
+        ) : null}
+        {jobs.polling ? (
+          <>
+            {' '}
+            <span class="jobs__count">刷新中…</span>
+          </>
+        ) : null}
       </p>
 
       {jobs.lastError !== null ? (

@@ -46,6 +46,35 @@ export function ConfirmDialog({
   onCancelRef.current = onCancel
   busyRef.current = busy
 
+  // 打开期间锁定页面滚动：移动端在遮罩上滑动会滚动背后的页面，关闭后位置已经跑偏。
+  // 滚动条消失带来的横向跳动用等宽 padding 补偿。
+  useEffect(() => {
+    if (!open) {
+      return
+    }
+    const { body } = document
+    const previousOverflow = body.style.overflow
+    const previousPaddingRight = body.style.paddingRight
+    const gutter = window.innerWidth - document.documentElement.clientWidth
+    body.style.overflow = 'hidden'
+    if (gutter > 0) {
+      body.style.paddingRight = `${gutter}px`
+    }
+    return () => {
+      body.style.overflow = previousOverflow
+      body.style.paddingRight = previousPaddingRight
+    }
+  }, [open])
+
+  // 出现错误时把面板滚到底部：错误块与操作按钮位于面板最下方，
+  // 窄屏上不滚动就看不到「重试提交」。
+  useEffect(() => {
+    const node = dialogRef.current
+    if (open && error !== null && node !== null) {
+      node.scrollTop = node.scrollHeight
+    }
+  }, [open, error])
+
   useEffect(() => {
     if (!open) {
       return
@@ -53,7 +82,6 @@ export function ConfirmDialog({
     const node = dialogRef.current
     previousFocusRef.current =
       document.activeElement instanceof HTMLElement ? document.activeElement : null
-
     const focusable = (): HTMLElement[] =>
       node === null ? [] : Array.from(node.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTOR))
 

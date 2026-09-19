@@ -64,4 +64,21 @@ describe('ConfirmDialog 可访问性', () => {
     )
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
   })
+
+  it('locks page scrolling while open and restores it on unmount', () => {
+    const { unmount } = render(
+      <ConfirmDialog
+        open
+        title="确认打印"
+        confirmLabel="确认打印"
+        onConfirm={() => undefined}
+        onCancel={() => undefined}
+      />,
+    )
+    // 移动端在遮罩上滑动不应该滚动背后的页面。
+    expect(document.body.style.overflow).toBe('hidden')
+
+    unmount()
+    expect(document.body.style.overflow).toBe('')
+  })
 })

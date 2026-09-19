@@ -2,11 +2,12 @@
 
 .notices {
   position: fixed;
+  right: env(safe-area-inset-right);
   bottom: calc(var(--space-6) + env(safe-area-inset-bottom));
-  left: 50%;
+  left: env(safe-area-inset-left);
   z-index: var(--z-toast);
-  width: min(560px, calc(100vw - var(--space-6)));
-  transform: translateX(-50%);
+  width: min(560px, 100% - var(--space-6));
+  margin-inline: auto;
   pointer-events: none;
 }
 
@@ -48,6 +49,7 @@
 }
 
 .notice__dismiss {
+  position: relative;
   display: inline-flex;
   flex: none;
   align-items: center;
@@ -63,6 +65,14 @@
     color var(--transition),
     background-color var(--transition),
     border-color var(--transition);
+}
+
+/* 视觉尺寸保持紧凑，但把命中区域扩大到触控友好的范围
+   （错误通知不会自动消失，这个按钮是唯一的出口）。 */
+.notice__dismiss::after {
+  position: absolute;
+  inset: -8px;
+  content: '';
 }
 
 .notice__dismiss:hover {
@@ -104,6 +114,23 @@
 
 @media (max-width: 640px) {
   .notices {
-    width: calc(100vw - var(--space-4) * 2);
+    bottom: calc(var(--space-4) + env(safe-area-inset-bottom));
+    width: min(560px, 100% - (var(--space-4) * 2));
+    /* 错误通知不会自动消失，窄屏上堆高了会盖住整屏内容，这里限制高度并可滚动。 */
+    max-height: 60svh;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    scrollbar-width: none;
+  }
+
+  .notices::-webkit-scrollbar {
+    display: none;
+  }
+
+  /* 触屏没有悬停，关闭通知是错误提示的唯一出口，需要足够大的触控区域。 */
+  .notice__dismiss {
+    width: var(--control-h-sm);
+    height: var(--control-h-sm);
+    margin: calc(-1 * var(--space-1)) calc(-1 * var(--space-2)) calc(-1 * var(--space-1)) 0;
   }
 }
