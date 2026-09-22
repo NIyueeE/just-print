@@ -1,15 +1,9 @@
-/* 主题切换按钮 */
+/* 主题切换按钮：图标按钮，当前偏好与点击效果收在 Tooltip 里。 */
 
 .theme-toggle {
-  padding: var(--space-2) var(--space-3);
+  color: var(--color-muted);
 }
 
-.theme-toggle__label {
-  font-size: var(--text-sm);
-}
-
-@media (max-width: 420px) {
-  .theme-toggle__label {
-    display: none;
-  }
+.theme-toggle:hover:not(:disabled) {
+  color: var(--color-text);
 }

@@ -25,6 +25,7 @@ import {
   XIcon,
 } from '../icons'
 import { createNotice, useAppDispatch, useAppState } from '../state'
+import { Tooltip } from './Tooltip'
 import './Uploader.css'
 
 type FileCategory = 'pdf' | 'office' | 'image' | 'text' | 'other'
@@ -343,26 +344,42 @@ export function Uploader() {
   return (
     <section class="card uploader" aria-labelledby="uploader-title">
       <div class="card__header">
-        <span class="step-badge step-badge--upload" aria-hidden="true">
-          1
-        </span>
         <span class="card__icon card__icon--upload" aria-hidden="true">
           <UploadIcon size={18} />
         </span>
         <h2 id="uploader-title">上传文档</h2>
+        <span class="uploader__meta">
+          {formatCount !== null ? (
+            <>
+              <Tooltip tip="格式列表来自服务器 /api/formats，所有格式都会先转换为 PDF 再打印">
+                支持 {formatCount} 种格式
+              </Tooltip>
+              <span class="uploader__meta-sep" aria-hidden="true">
+                ·
+              </span>
+              <Tooltip tip="单个文件的大小上限，超出会在上传前被拒绝">最大 {maxSizeLabel}</Tooltip>
+            </>
+          ) : (
+            <Tooltip tip="支持 PDF、Office、图片、HTML、CSV 等格式，统一转换为 PDF 后打印">
+              格式由服务器裁定
+            </Tooltip>
+          )}
+        </span>
       </div>
-      <p class="muted">
-        {formatCount !== null
-          ? `支持 ${formatCount} 种扩展名格式（来自服务器 /api/formats），将统一转换为 PDF 后打印。`
-          : '支持 PDF、Office、图片、HTML、CSV 等格式，将统一转换为 PDF 后打印。'}
-      </p>
       {formatsError !== null ? (
         <div class="inline-hint inline-hint--warning" role="status">
           <AlertIcon size={15} />
-          <span>无法读取支持格式列表，将由服务器在收到文件时校验：{formatsError}</span>
-          <button type="button" class="ghost ghost--sm" onClick={() => void reloadFormats()}>
+          <Tooltip tip={formatsError}>
+            <span>格式列表读取失败，将由服务器校验</span>
+          </Tooltip>
+          <button
+            type="button"
+            class="ghost ghost--sm ghost--icon tip"
+            data-tip="重新读取支持格式列表"
+            aria-label="重新读取支持格式列表"
+            onClick={() => void reloadFormats()}
+          >
             <RefreshIcon size={14} />
-            重试
           </button>
         </div>
       ) : null}
@@ -439,29 +456,29 @@ export function Uploader() {
                 ) : null}
                 <strong class="uploader__file-name">{upload.file.name}</strong>
               </span>
-              <span class="muted">
-                {formatBytes(upload.file.size)} · 点击或拖拽可更换，按 Enter 打开文件选择器
-              </span>
+              <span class="muted">{formatBytes(upload.file.size)} · 点击或拖拽可更换</span>
             </span>
           ) : (
             <span class="uploader__prompt">
               <strong>点击选择文件，或将文件拖到这里</strong>
               <span class="muted">
-                单个文件，最大 {maxSizeLabel}
-                {formatCount !== null ? ` · 支持 ${formatCount} 种格式` : ''}
+                最大 {maxSizeLabel}
+                {formatCount !== null ? ` · ${formatCount} 种格式` : ''}
               </span>
             </span>
           )}
         </div>
 
-        <p class="uploader__hint" id="uploader-hint">
+        {/* 键盘操作说明只保留在可访问性树里：aria-describedby 指向它，
+            视觉上由图标与按钮文案承担，避免版面噪音。 */}
+        <p class="uploader__hint visually-hidden" id="uploader-hint">
           支持键盘操作：按 Tab 聚焦本区域，按 Enter 或空格打开文件选择器。
         </p>
 
         {busy ? (
           <div class="uploader__progress" aria-busy="true">
             <div class="uploader__progress-head">
-              <span>{upload.phase === 'converting' ? '服务器转换中…' : '正在上传…'}</span>
+              <span>{upload.phase === 'converting' ? '转换中…' : '上传中…'}</span>
               <span class="uploader__progress-value">{upload.progress}%</span>
             </div>
             <progress
@@ -470,9 +487,14 @@ export function Uploader() {
               value={upload.progress}
               aria-label="上传进度"
             />
-            <button type="button" class="ghost ghost--sm" onClick={cancelUpload}>
+            <button
+              type="button"
+              class="ghost ghost--sm ghost--icon tip"
+              data-tip="取消上传"
+              aria-label="取消上传"
+              onClick={cancelUpload}
+            >
               <BanIcon size={14} />
-              取消上传
             </button>
           </div>
         ) : null}
@@ -492,7 +514,7 @@ export function Uploader() {
             ) : upload.result !== null ? (
               <>
                 <CheckIcon size={16} />
-                已上传并转换
+                已转换
               </>
             ) : (
               <>
@@ -502,9 +524,14 @@ export function Uploader() {
             )}
           </button>
           {upload.file !== null && !busy ? (
-            <button type="button" class="ghost" onClick={() => void handleRemove()}>
+            <button
+              type="button"
+              class="ghost ghost--icon tip"
+              data-tip="移除文件"
+              aria-label="移除文件"
+              onClick={() => void handleRemove()}
+            >
               <XIcon size={14} />
-              移除文件
             </button>
           ) : null}
         </div>
@@ -529,17 +556,20 @@ export function Uploader() {
         <div class="uploader__preview">
           <div class="uploader__preview-head">
             <EyeIcon size={16} />
-            <h3>预览：{upload.result.name}</h3>
-            <span class="muted">（{formatBytes(upload.result.size)}）</span>
+            <h3 class="uploader__preview-name" title={upload.result.name}>
+              {upload.result.name}
+            </h3>
+            <span class="muted">{formatBytes(upload.result.size)}</span>
             <button
               type="button"
-              class="ghost ghost--sm uploader__preview-toggle"
-              onClick={() => setPreviewOpen((open) => !open)}
+              class="ghost ghost--sm tip uploader__preview-toggle"
+              data-tip={previewOpen ? '收起预览' : '展开预览'}
+              aria-label={previewOpen ? '收起预览' : '展开预览'}
               aria-expanded={previewOpen}
               aria-controls="uploader-preview-frame"
+              onClick={() => setPreviewOpen((open) => !open)}
             >
               {previewOpen ? <ChevronUpIcon size={14} /> : <ChevronDownIcon size={14} />}
-              {previewOpen ? '收起' : '展开'}
             </button>
           </div>
           {previewOpen ? (

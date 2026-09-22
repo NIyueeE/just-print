@@ -11,8 +11,10 @@ import { Uploader } from './components/Uploader'
 import { formatDurationMs } from './format'
 import { GitHubIcon, LogoMark, LogoutIcon } from './icons'
 import { useAuthGuard } from './hooks/useAuthGuard'
+import { optionDoc } from './options'
 import { usePrintSubmission } from './print'
 import { deriveSteps, useAppDispatch, useAppState } from './state'
+import { Tooltip } from './components/Tooltip'
 import './app.css'
 
 export function App() {
@@ -82,7 +84,7 @@ export function App() {
         <div class="header-actions">
           <ThemeToggle />
           <a
-            class="ghost github-link"
+            class="ghost ghost--icon github-link"
             href="https://github.com/NIyueeE/just-print"
             target="_blank"
             rel="noreferrer"
@@ -91,9 +93,14 @@ export function App() {
           >
             <GitHubIcon size={18} />
           </a>
-          <button type="button" class="ghost" onClick={handleLogout}>
+          <button
+            type="button"
+            class="ghost ghost--icon tip"
+            data-tip="退出登录"
+            aria-label="退出登录"
+            onClick={handleLogout}
+          >
             <LogoutIcon size={16} />
-            退出登录
           </button>
         </div>
       </header>
@@ -115,7 +122,7 @@ export function App() {
       <ConfirmDialog
         open={confirmation !== null}
         title="确认打印"
-        description="打印是物理操作，提交后无法撤回。请确认以下设置后再继续。"
+        description="打印是物理操作，提交后无法撤回。"
         confirmLabel={print.error !== null ? '重试提交' : '确认打印'}
         busyLabel="提交中…"
         busy={print.submitting}
@@ -139,7 +146,13 @@ export function App() {
             </div>
             {confirmation.summary.map((row) => (
               <div class="confirm-summary__row" key={row.label}>
-                <dt>{row.label}</dt>
+                <dt>
+                  {row.key !== null ? (
+                    <Tooltip tip={optionDoc(row.key)}>{row.label}</Tooltip>
+                  ) : (
+                    row.label
+                  )}
+                </dt>
                 <dd>{row.value}</dd>
               </div>
             ))}

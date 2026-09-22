@@ -66,7 +66,6 @@ export function TokenGate({ message = null, onValid }: TokenGateProps) {
   }
 
   const describedBy = [
-    'token-hint',
     ...(message !== null ? ['token-message'] : []),
     ...(error !== null ? ['token-error'] : []),
   ].join(' ')
@@ -79,7 +78,7 @@ export function TokenGate({ message = null, onValid }: TokenGateProps) {
         </div>
         <div>
           <h1 class="token-gate__title">Just Print</h1>
-          <p class="muted">请输入访问令牌以使用打印服务</p>
+          <p class="muted">输入访问令牌</p>
         </div>
         {message !== null ? (
           <p class="token-gate__notice" id="token-message" role="status">
@@ -131,10 +130,6 @@ export function TokenGate({ message = null, onValid }: TokenGateProps) {
             </>
           )}
         </button>
-        <p class="token-gate__hint" id="token-hint">
-          令牌由管理员提供（对应环境变量 JUST_PRINT_TOKEN），仅保存在当前标签页的 sessionStorage
-          中，关闭标签页后失效。
-        </p>
         {error !== null ? (
           <p class="token-gate__error" id="token-error" role="alert">
             <AlertIcon size={15} />

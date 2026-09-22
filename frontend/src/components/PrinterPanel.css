@@ -6,6 +6,17 @@
   gap: var(--space-3);
 }
 
+/* 选项标签带专业名词解释：悬停字段时才显示虚线 affordance，平静时不增加噪音。 */
+.printer-panel__controls .field__label-text {
+  border-bottom: 1px dotted transparent;
+  transition: border-color var(--transition);
+}
+
+.printer-panel__controls .tip--block:hover .field__label-text,
+.printer-panel__controls .tip--block:focus-within .field__label-text {
+  border-bottom-color: var(--color-border-strong);
+}
+
 .printer-panel__summary {
   display: flex;
   flex-wrap: wrap;

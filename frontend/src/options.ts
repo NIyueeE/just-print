@@ -93,6 +93,33 @@ const UNIT_LABELS: Record<string, string> = {
   'printer-resolution': 'dpi',
 }
 
+/* -------------------------------------------------------------------------- */
+/* 专业选项目名的悬停解释                                                      */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * IPP/CUPS 选项键的悬停解释：界面上只显示中文标签，专业属性名与含义
+ * 收在 Tooltip 里，避免把非专业用户埋在术语中。
+ */
+const OPTION_DOCS: Record<string, string> = {
+  media: 'IPP media · 纸张大小，如 iso_a4_210x297mm 即 A4',
+  sides: 'IPP sides · 单双面；长边装订适合纵向文档，短边适合横向',
+  'print-color-mode': 'IPP print-color-mode · 彩色或黑白输出',
+  'print-quality': 'IPP print-quality · 草稿最快最淡，高最慢最浓',
+  'printer-resolution': 'IPP printer-resolution · 打印分辨率（dpi），越高越清晰也越慢',
+  copies: 'IPP copies · 打印份数，留空表示用打印机默认',
+  'number-up': 'IPP number-up · 每张纸合并打印的页数（N-up）',
+  'media-type': 'IPP media-type · 纸张类型（普通纸 / 相纸 / 信封等）',
+  'output-bin': 'IPP output-bin · 出纸盒与出纸朝向',
+  'orientation-requested': 'IPP orientation-requested · 页面方向',
+  finishings: 'IPP finishings · 装订、打孔等印后处理',
+}
+
+/** 选项键的悬停解释；未收录的键至少暴露原始 IPP 属性名。 */
+export function optionDoc(key: string): string {
+  return OPTION_DOCS[key] ?? `IPP 属性 ${key}（该打印机通过 CUPS 暴露）`
+}
+
 const A4_PATTERN = /(^|[^a-z0-9])a4([^0-9]|$)/i
 const DUPLEX_LONG_EDGE = new Set(['twosidedlongedge'])
 
@@ -257,13 +284,6 @@ function valueLabel(key: string, value: string): string {
   return VALUE_LABELS[key]?.[value] ?? value
 }
 
-function unitLabel(key: string, spec: OptionSpec): string | null {
-  if (spec.kind === 'resolution') {
-    return null
-  }
-  return UNIT_LABELS[key] ?? null
-}
-
 export interface OptionChoice {
   value: string
   label: string
@@ -286,10 +306,6 @@ export function optionChoices(key: string, spec: OptionSpec): OptionChoice[] {
     case 'integer':
       return []
   }
-}
-
-export function optionUnit(key: string, spec: OptionSpec): string | null {
-  return unitLabel(key, spec)
 }
 
 export function isNumericOption(

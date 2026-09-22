@@ -91,7 +91,8 @@ export interface PendingPrint {
   payload: PrintPayload
   printerName: string
   fileName: string
-  summary: { label: string; value: string }[]
+  /** key 为 IPP 选项键（用于 Tooltip 解释），文件/打印机等行传 null。 */
+  summary: { key: string | null; label: string; value: string }[]
 }
 
 export interface PrintState {

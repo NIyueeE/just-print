@@ -40,9 +40,9 @@ export function ThemeToggle() {
   return (
     <button
       type="button"
-      class="ghost theme-toggle"
+      class="ghost ghost--icon theme-toggle tip"
+      data-tip={`${actionLabel}（当前：${PREFERENCE_LABEL[preference]}）`}
       aria-label={actionLabel}
-      title={`${actionLabel}（当前：${PREFERENCE_LABEL[preference]}）`}
       onClick={() =>
         setPreference((current) => nextThemePreference(current, resolveTheme(current)))
       }
@@ -54,7 +54,6 @@ export function ThemeToggle() {
       ) : (
         <SunIcon size={16} />
       )}
-      <span class="theme-toggle__label">{PREFERENCE_LABEL[preference]}</span>
     </button>
   )
 }

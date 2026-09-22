@@ -46,10 +46,10 @@ describe('App 集成', () => {
     expect(screen.getByRole('heading', { name: '上传文档' })).toBeInTheDocument()
     expect(screen.getByRole('heading', { name: '打印' })).toBeInTheDocument()
     expect(await screen.findByText(/未发现打印机/)).toBeInTheDocument()
-    expect(await screen.findByText(/支持 2 种扩展名格式/)).toBeInTheDocument()
+    expect(await screen.findByText(/支持 2 种格式/)).toBeInTheDocument()
 
     fireEvent.click(screen.getByRole('button', { name: /退出登录/ }))
-    expect(screen.getByText('请输入访问令牌以使用打印服务')).toBeInTheDocument()
+    expect(screen.getByText('输入访问令牌')).toBeInTheDocument()
     expect(sessionStorage.getItem('just_print_token')).toBeNull()
   })
 })

@@ -3,24 +3,39 @@
 .jobs__counts {
   display: flex;
   flex-wrap: wrap;
-  gap: 0 var(--space-2);
-  align-items: baseline;
+  gap: var(--space-1);
+  align-items: center;
   margin-top: var(--space-1);
   color: var(--color-muted);
-  font-size: var(--text-sm);
+  font-size: var(--text-xs);
 }
 
-/* 每一项独立成块：窄屏换行发生在统计项之间，而不是「已取消 / 0」这样被拆开。 */
+/* 每一项独立成块（外包 Tooltip）：窄屏换行发生在统计项之间，
+   而不是「已取消 / 0」这样被拆开。 */
 .jobs__count {
   display: inline-flex;
   gap: 0.35em;
   align-items: baseline;
+  padding: 2px var(--space-2);
+  background: var(--color-neutral-soft);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-full);
   white-space: nowrap;
 }
 
 .jobs__count-value {
   color: var(--color-text);
   font-family: var(--font-mono);
+  font-weight: var(--weight-semibold);
+}
+
+.jobs__count--polling {
+  padding: 2px var(--space-2);
+  color: var(--color-info-text);
+}
+
+.jobs__count--polling .spinner-icon {
+  display: block;
 }
 
 .jobs__list {
