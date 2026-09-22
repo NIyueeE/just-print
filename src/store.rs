@@ -159,3 +159,102 @@ impl FileStore {
             .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+    use std::time::{Duration, Instant};
+
+    use super::FileStore;
+
+    fn store() -> Arc<FileStore> {
+        Arc::new(FileStore::default())
+    }
+
+    #[test]
+    fn guard_blocks_removal_and_cleanup_until_released() {
+        let store = store();
+        let path = std::env::temp_dir().join("jp-store-test.pdf");
+        store.insert("f1".to_string(), "a.pdf".to_string(), path.clone(), 10);
+
+        let guard = store.guard("f1");
+        assert!(guard.is_some(), "存在的文件应能取到引用");
+        assert!(store.remove("f1").is_none(), "持有引用的文件不能删除");
+        assert_eq!(
+            store.cleanup(Duration::ZERO),
+            0,
+            "持有引用的文件不应被 TTL 清理"
+        );
+        drop(guard);
+        assert_eq!(
+            store.remove("f1"),
+            Some(path),
+            "释放引用后应允许删除并返回路径"
+        );
+        assert!(!store.contains("f1"));
+    }
+
+    #[test]
+    fn cleanup_removes_only_expired_unreferenced_files() {
+        let store = store();
+        store.insert(
+            "old".to_string(),
+            "old.pdf".to_string(),
+            std::env::temp_dir().join("jp-store-old.pdf"),
+            1,
+        );
+        store.insert(
+            "new".to_string(),
+            "new.pdf".to_string(),
+            std::env::temp_dir().join("jp-store-new.pdf"),
+            1,
+        );
+        // 人为把 old 的创建时间推到过去（记录字段仅测试可写）。
+        {
+            let mut inner = store.lock();
+            if let Some(record) = inner.get_mut("old") {
+                record.created_at = Instant::now()
+                    .checked_sub(Duration::from_secs(120))
+                    .unwrap_or(record.created_at);
+            }
+        }
+        assert_eq!(
+            store.cleanup(Duration::from_secs(60)),
+            1,
+            "只应清理过期文件"
+        );
+        assert!(store.contains("new"), "未过期文件必须保留");
+        assert!(!store.contains("old"));
+    }
+
+    #[test]
+    fn guard_of_missing_file_is_none() {
+        let store = store();
+        assert!(store.guard("nope").is_none());
+        assert!(store.remove("nope").is_none());
+        assert_eq!(store.cleanup(Duration::ZERO), 0);
+    }
+
+    #[test]
+    fn release_is_saturating_and_counts_bytes() {
+        let store = store();
+        store.insert(
+            "f1".to_string(),
+            "a.pdf".to_string(),
+            std::env::temp_dir().join("jp-store-bytes.pdf"),
+            7,
+        );
+        store.insert(
+            "f2".to_string(),
+            "b.pdf".to_string(),
+            std::env::temp_dir().join("jp-store-bytes2.pdf"),
+            5,
+        );
+        assert_eq!(store.len(), 2);
+        assert_eq!(store.total_bytes(), 12);
+        // 未持引用就 release 不应下溢成巨大的引用计数。
+        store.release("f1");
+        assert!(store.remove("f1").is_some(), "无引用文件仍可删除");
+        assert_eq!(store.len(), 1);
+    }
+}
