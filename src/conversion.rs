@@ -102,22 +102,6 @@ fn push_escaped(output: &mut String, text: &str) {
 /// 前置一个不可见的占位段落让它吞，保住真实内容。
 const LO_GUARD_PARAGRAPH: &str = "<p style=\"font-size: 1pt; color: #ffffff;\">&nbsp;</p>";
 
-/// 判断标签是否为块级元素。
-fn is_block_start(tag: &Tag<'_>) -> bool {
-    matches!(
-        tag,
-        Tag::Paragraph
-            | Tag::Heading { .. }
-            | Tag::BlockQuote(_)
-            | Tag::CodeBlock(_)
-            | Tag::List(_)
-            | Tag::Table(_)
-            | Tag::HtmlBlock
-            | Tag::FootnoteDefinition(_)
-            | Tag::DefinitionList
-    )
-}
-
 /// 输出标签的开始标记（表格表头状态由 `in_table_header` 维护）。
 fn push_markdown_start(output: &mut String, tag: Tag<'_>, in_table_header: &mut bool) {
     match tag {
@@ -216,15 +200,17 @@ fn render_markdown_body(markdown: &str) -> String {
     );
     let mut output = String::new();
     let mut in_table_header = false;
-    let mut first_block = true;
+    // LibreOffice 会吞掉正文里第一个段落/标题；守护段必须在「第一个实际输出的
+    // 段落或标题」之前插入，而不是第一个解析到的块之前——文档以列表、表格或
+    // HTML 块开头时，那些块不产出任何文本，若在此消耗 first_block，
+    // 后面的标题就拿不到守护段，会被 LibreOffice 吞掉。
+    let mut guard_pending = true;
     for event in Parser::new_ext(markdown, options) {
         match event {
             Event::Start(tag) => {
-                if first_block && is_block_start(&tag) {
-                    if matches!(tag, Tag::Paragraph | Tag::Heading { .. }) {
-                        output.push_str(LO_GUARD_PARAGRAPH);
-                    }
-                    first_block = false;
+                if guard_pending && matches!(tag, Tag::Paragraph | Tag::Heading { .. }) {
+                    output.push_str(LO_GUARD_PARAGRAPH);
+                    guard_pending = false;
                 }
                 push_markdown_start(&mut output, tag, &mut in_table_header);
             }
@@ -433,6 +419,35 @@ mod tests {
         assert!(html.contains("<table>"));
         assert!(html.contains("font-size: 18pt"));
         assert!(html.contains("font-size: 1pt; color: #ffffff;"));
+        let _ = std::fs::remove_dir_all(&temp);
+    }
+
+    #[tokio::test]
+    async fn markdown_guard_precedes_first_heading_after_other_blocks() {
+        // 回归：文档以列表开头时，旧逻辑把「首个块」消耗在列表上，导致后面的
+        // 标题拿不到守护段，被 LibreOffice HTML 导入吞掉（内容丢失）。
+        let temp = std::env::temp_dir().join(format!("just-print-test-{}", ids::new_id()));
+        assert!(std::fs::create_dir_all(&temp).is_ok());
+        let source = temp.join("notes.md");
+        assert!(std::fs::write(&source, "- 第一项\n- 第二项\n\n# 标题\n\n正文。").is_ok());
+        let result = render_markdown_to_html(&source, &temp).await;
+        assert!(result.is_ok());
+        let Ok(html_path) = result else {
+            return;
+        };
+        let html = std::fs::read_to_string(&html_path);
+        assert!(html.is_ok());
+        let Ok(html) = html else {
+            return;
+        };
+        let guard = html.find("font-size: 1pt");
+        let heading = html.find("<h1");
+        assert!(guard.is_some(), "应插入守护段: {html}");
+        assert!(heading.is_some(), "应保留标题: {html}");
+        if let (Some(guard), Some(heading)) = (guard, heading) {
+            assert!(guard < heading, "守护段必须在标题之前: {html}");
+        }
+        assert!(html.contains("<li>第一项</li>"), "列表内容必须保留: {html}");
         let _ = std::fs::remove_dir_all(&temp);
     }
 
