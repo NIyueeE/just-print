@@ -66,11 +66,13 @@ pub async fn list(
         if let Some((printer, _)) = split_job_id(&record.id)
             && !by_printer.contains_key(&printer)
         {
-            let jobs = state
-                .cups
-                .list_jobs(&printer)
-                .await
-                .map_err(AppError::from)?;
+            let jobs = match state.cups.list_jobs(&printer).await {
+                Ok(jobs) => jobs,
+                // 打印机已从 CUPS 移除时不该让整个列表失败：该打印机的任务
+                // 按「已清理」展示，其余打印机的任务照常返回。
+                Err(CupsError::NotFound) => Vec::new(),
+                Err(error) => return Err(AppError::from(error)),
+            };
             let map = jobs.into_iter().map(|job| (job.cups_job_id, job)).collect();
             by_printer.insert(printer, map);
         }

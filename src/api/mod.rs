@@ -9,6 +9,9 @@ pub mod middleware;
 pub mod print;
 pub mod printers;
 
+#[cfg(test)]
+mod flow_tests;
+
 use std::sync::Arc;
 
 use axum::Router;
