@@ -147,8 +147,13 @@ impl IdempotencyStore {
 
     fn enforce_capacity(&self, inner: &mut HashMap<String, Entry>) {
         while inner.len() >= self.capacity {
+            // 只淘汰已完成条目：进行中的条目对应「请求已受理、响应未返回」的
+            // 真实打印。它一旦被淘汰，同键重试会拿到 Fresh 并再次提交，
+            // 幂等保护失效、造成重复出纸。全部条目都在进行中时停止淘汰，
+            // 让容量被并发量短暂突破，由 TTL 兜底回收。
             let oldest = inner
                 .iter()
+                .filter(|(_, entry)| matches!(entry, Entry::Completed { .. }))
                 .min_by_key(|(_, entry)| entry.at())
                 .map(|(key, _)| key.clone());
             match oldest {
@@ -218,6 +223,40 @@ mod tests {
         assert!(matches!(store.begin("k", "other"), Begin::Conflict));
         store.abort("k");
         assert!(matches!(store.begin("k", "other"), Begin::Fresh { .. }));
+    }
+
+    #[test]
+    fn in_progress_entries_survive_capacity_pressure() {
+        // 回归：容量淘汰曾按时间驱逐最旧条目，可能吃掉「进行中」的键，
+        // 之后同键重试拿到 Fresh 并重复提交打印。
+        let store = IdempotencyStore::new(Duration::from_mins(1), 4);
+        for index in 0..4 {
+            assert!(
+                matches!(store.begin(&format!("k{index}"), "fp"), Begin::Fresh { .. }),
+                "前 4 个键都应首次受理"
+            );
+        }
+        // 第 5 个键触发淘汰：只能淘汰已完成条目，而这里全部在进行中。
+        assert!(matches!(store.begin("k4", "fp"), Begin::Fresh { .. }));
+        assert!(
+            matches!(store.begin("k0", "fp"), Begin::InProgress),
+            "进行中的幂等键不得被容量淘汰"
+        );
+    }
+
+    #[test]
+    fn completed_entries_are_evicted_when_full() {
+        let store = IdempotencyStore::new(Duration::from_mins(1), 2);
+        assert!(matches!(store.begin("a", "fp"), Begin::Fresh { .. }));
+        store.complete("a", "fp", json!({"ok": true}));
+        assert!(matches!(store.begin("b", "fp"), Begin::Fresh { .. }));
+        store.complete("b", "fp", json!({"ok": true}));
+        // 已满且全部完成：新键应淘汰最旧的 "a" 而不是拒绝服务。
+        assert!(matches!(store.begin("c", "fp"), Begin::Fresh { .. }));
+        assert!(
+            matches!(store.begin("a", "fp"), Begin::Fresh { .. }),
+            "已完成的旧键应被淘汰"
+        );
     }
 
     #[test]
