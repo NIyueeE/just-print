@@ -6,7 +6,7 @@ on:
       - "v*"
 
 permissions:
-  contents: read
+  contents: write
   packages: write
 
 jobs:
@@ -37,3 +37,19 @@ jobs:
             ghcr.io/${{ steps.repo.outputs.repository }}:${{ github.ref_name }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+      # GitHub Release 与镜像同源缺失过（v0.3.10 只有 tag + 镜像、没有 Release
+      # 页面），因此推 tag 即用 docs/releases/<tag>.md 自动建 Release；已存在则
+      # 跳过（幂等），说明文件缺失时退回自动生成的 notes。
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          notes="docs/releases/${TAG}.md"
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "Release for $TAG already exists; nothing to do"
+          elif [ -f "$notes" ]; then
+            gh release create "$TAG" --title "$TAG" --notes-file "$notes"
+          else
+            gh release create "$TAG" --title "$TAG" --generate-notes
+          fi
