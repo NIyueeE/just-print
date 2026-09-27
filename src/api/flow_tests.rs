@@ -542,6 +542,27 @@ async fn empty_upload_is_rejected() {
     );
 }
 
+/// 回归：PDF 直通不得占用 `LibreOffice` 转换槽。
+///
+/// 占满转换槽（模拟一个尚未结束的 soffice 转换）时，PDF 上传仍应秒过——
+/// 它只读魔数、不启动子进程。曾经的实现让 PDF 也排进槽里，最多干等一个
+/// 转换周期，表现为「上传纯 PDF 一直卡住」。
+#[tokio::test]
+async fn pdf_upload_does_not_wait_for_conversion_slots() {
+    let Some((state, _temp)) = test_state().await else {
+        return;
+    };
+    // 测试状态只有 1 个转换槽；先占满它。
+    let held = state.conversion_slots.clone().acquire_owned().await.ok();
+    let app = super::router(&state);
+    let outcome = tokio::time::timeout(Duration::from_secs(5), upload_pdf(&app)).await;
+    drop(held);
+    assert!(
+        outcome.is_ok(),
+        "PDF 上传不应等待 LibreOffice 转换槽（表现为上传一直卡住）"
+    );
+}
+
 /// 回归：打印机已从 CUPS 移除时，任务列表必须仍能返回（该打印机的任务按
 /// `已清理` 展示），而不是整表 404。
 #[tokio::test]

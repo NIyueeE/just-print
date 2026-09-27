@@ -29,6 +29,15 @@ pub const SUPPORTED_EXTENSIONS: [&str; 172] = [
     "xml", "xpm", "zabw", "zip", "zmf",
 ];
 
+/// 该扩展名是否为「原样通过」格式：只做魔数校验，不启动 `LibreOffice`。
+///
+/// 调用方可据此跳过 `LibreOffice` 并发槽——直通不产生子进程，无需与
+/// `soffice` 排队；否则一个排在缓慢转换后面的 PDF 上传会白白干等。
+#[must_use]
+pub fn is_passthrough_extension(extension: &str) -> bool {
+    extension.eq_ignore_ascii_case("pdf")
+}
+
 /// 文档转换错误。
 #[derive(Debug, Error)]
 pub enum ConversionError {
@@ -325,7 +334,7 @@ pub async fn convert_to_pdf(
         return Err(ConversionError::UnsupportedExtension(extension));
     }
 
-    if extension == "pdf" {
+    if is_passthrough_extension(&extension) {
         validate_pdf_magic(source).await?;
         return Ok(source.to_path_buf());
     }
@@ -392,7 +401,9 @@ pub async fn convert_to_pdf(
 mod tests {
     use crate::ids;
 
-    use super::{SUPPORTED_EXTENSIONS, convert_to_pdf, render_markdown_to_html};
+    use super::{
+        SUPPORTED_EXTENSIONS, convert_to_pdf, is_passthrough_extension, render_markdown_to_html,
+    };
 
     #[tokio::test]
     async fn markdown_renders_headings_code_and_tables() {
@@ -488,6 +499,14 @@ mod tests {
                 .is_err()
         );
         let _ = std::fs::remove_dir_all(&temp);
+    }
+
+    #[test]
+    fn passthrough_extension_is_pdf_only() {
+        assert!(is_passthrough_extension("pdf"));
+        assert!(is_passthrough_extension("PDF"));
+        assert!(!is_passthrough_extension("md"));
+        assert!(!is_passthrough_extension("docx"));
     }
 
     #[test]

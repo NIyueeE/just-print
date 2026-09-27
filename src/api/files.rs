@@ -49,6 +49,9 @@ pub async fn upload(
 
     let id = ids::new_id();
     let mut pending: Option<(String, PathBuf, u64)> = None;
+    // PDF 只校验魔数后原样返回，不启动 `LibreOffice`，因此也不占转换槽
+    // （判定单一来源：`conversion::is_passthrough_extension`）。
+    let mut passthrough = false;
     while let Some(mut field) = multipart
         .next_field()
         .await
@@ -65,6 +68,7 @@ pub async fn upload(
         if !conversion::SUPPORTED_EXTENSIONS.contains(&extension.as_str()) {
             return Err(AppError::UnsupportedMediaType(name));
         }
+        passthrough = conversion::is_passthrough_extension(&extension);
         let path = state.temp_dir.join(format!("{id}-upload.{extension}"));
         let size = write_field(&mut field, &path, state.config.max_upload_bytes).await?;
         // 必须先释放当前 field（multer 在同一时刻只允许一个 field 持有状态锁），
@@ -85,12 +89,21 @@ pub async fn upload(
     let (name, source_path, original_size) =
         pending.ok_or_else(|| AppError::BadRequest("缺少 file 字段".to_string()))?;
 
-    let conversion_permit = state
-        .conversion_slots
-        .clone()
-        .acquire_owned()
-        .await
-        .map_err(|_| AppError::ServiceUnavailable("转换通道已关闭".to_string()))?;
+    // 只有真正要启动 soffice 的格式才排队转换槽。PDF 直通若也排进槽里，
+    // 会无谓地等在前面尚未结束的 LibreOffice 转换后面（占满 2 个槽时最多
+    // 干等一个转换周期），表现为「上传纯 PDF 一直卡住」。
+    let conversion_permit = if passthrough {
+        None
+    } else {
+        Some(
+            state
+                .conversion_slots
+                .clone()
+                .acquire_owned()
+                .await
+                .map_err(|_| AppError::ServiceUnavailable("转换通道已关闭".to_string()))?,
+        )
+    };
     let result = conversion::convert_to_pdf(
         &source_path,
         &state.temp_dir,
