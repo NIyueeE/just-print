@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   ApiError,
+  UPLOAD_TIMEOUT_MS,
   isIdempotencyConflict,
   isRetryable,
   listPrinters,
@@ -9,6 +10,7 @@ import {
   retryAfterHint,
   submitPrint,
   getFormats,
+  uploadFile,
 } from './api'
 
 function jsonResponse(
@@ -172,5 +174,69 @@ describe('请求行为', () => {
       }),
     )
     await expect(listPrinters()).rejects.toMatchObject({ code: 'network', status: 0 })
+  })
+})
+
+/** jsdom 不实现 XMLHttpRequest：用可手动触发事件的最小假件驱动 `uploadFile`。 */
+class FakeXhr {
+  static last: FakeXhr | null = null
+  timeout = 0
+  status = 0
+  responseText = ''
+  responseType = ''
+  onload: (() => void) | null = null
+  onerror: (() => void) | null = null
+  ontimeout: (() => void) | null = null
+  onabort: (() => void) | null = null
+  upload = { onprogress: null }
+
+  constructor() {
+    FakeXhr.last = this
+  }
+
+  open(): void {
+    /* 假件：不发起真实请求 */
+  }
+
+  setRequestHeader(): void {
+    /* 假件：忽略请求头 */
+  }
+
+  send(): void {
+    /* 假件：保持挂起，等待测试手动触发事件 */
+  }
+
+  addEventListener(): void {
+    /* 假件：不需要事件监听 */
+  }
+
+  removeEventListener(): void {
+    /* 假件：不需要事件监听 */
+  }
+
+  abort(): void {
+    /* 假件：不实现中断 */
+  }
+}
+
+describe('上传超时', () => {
+  beforeEach(() => {
+    FakeXhr.last = null
+  })
+
+  it('sets a finite upload timeout and surfaces it as a timeout ApiError', async () => {
+    vi.stubGlobal('XMLHttpRequest', FakeXhr)
+
+    const file = new File(['%PDF-1.7 minimal'], 'report.pdf', { type: 'application/pdf' })
+    const pending = uploadFile(file)
+
+    // Promise 执行器同步执行到 send()，此时所有回调与 timeout 已就位。
+    const xhr = FakeXhr.last
+    expect(xhr).not.toBeNull()
+    expect(xhr?.timeout).toBe(UPLOAD_TIMEOUT_MS)
+    expect(xhr?.timeout).toBeGreaterThan(0)
+
+    xhr?.ontimeout?.()
+    await expect(pending).rejects.toMatchObject({ code: 'timeout', status: 0 })
   })
 })

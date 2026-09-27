@@ -19,6 +19,13 @@ export const DEFAULT_TIMEOUT_MS = 20_000
 /** 预览文件可能较大，给更宽松的超时。 */
 export const PREVIEW_TIMEOUT_MS = 60_000
 
+/**
+ * 上传（含服务端转换）整体超时：与后端 `request_timeout`（默认 5 分钟）对齐。
+ * `uploadFile` 走 XMLHttpRequest，默认 `timeout = 0` 永不超时；没有这个上限时，
+ * 服务端或中间链路不返回响应会让进度区永远转圈（其余请求都有超时，唯独它漏了）。
+ */
+export const UPLOAD_TIMEOUT_MS = 300_000
+
 /** Retry-After 的最长等待，避免 UI 被服务端要求长时间挂起。 */
 export const MAX_RETRY_AFTER_MS = 60_000
 
@@ -537,6 +544,9 @@ export function uploadFile(file: File, options: UploadOptions = {}): Promise<Upl
     xhr.setRequestHeader('Authorization', `Bearer ${getStoredToken()}`)
     xhr.setRequestHeader('Accept', 'application/json')
     xhr.responseType = 'text'
+    // 上传/转换整体设上限：超时后 ontimeout 转成 `timeout` ApiError，
+    // 由 `friendlyUploadError` 提示「上传超时，请重试」，而不是永远转圈。
+    xhr.timeout = UPLOAD_TIMEOUT_MS
     xhr.upload.onprogress = (event: ProgressEvent): void => {
       if (event.lengthComputable && event.total > 0) {
         options.onProgress?.(Math.min(100, Math.round((event.loaded / event.total) * 100)))

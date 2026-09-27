@@ -151,6 +151,8 @@ export function friendlyUploadError(error: unknown): string {
           : '服务繁忙，请稍后重试。'
       case 'timeout':
         return '上传超时，请重试。'
+      case 'gateway_timeout':
+        return '服务端处理超时（可能仍在转换），请稍后重试或换更小的文件。'
       case 'network':
         return '网络异常，请检查连接后重试。'
       default:
