@@ -855,6 +855,57 @@ async fn ambiguous_job_number_is_rejected() {
     assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
     assert!(body.contains("多台打印机"), "应提示使用完整 id: {body}");
 }
+
+/// 回归：上传途中客户端断开时，临时目录不得留下未登记的半成品——它们既不在
+/// `FileStore` 里（TTL 清理看不到），也没有请求来收尾，会一直占着磁盘。
+#[tokio::test]
+async fn interrupted_upload_leaves_no_temp_files() {
+    use tokio::io::AsyncWriteExt as _;
+
+    let Some((state, temp)) = test_state().await else {
+        return;
+    };
+    let app = super::router(&state);
+    let Some(addr) = serve_router(app.clone()).await else {
+        return;
+    };
+
+    // 声明 200000 字节正文却只发送一小段，然后在服务端等待正文时断开连接。
+    let (content_type, _payload) = multipart_pdf("report.pdf");
+    let head = format!(
+        "POST /api/files HTTP/1.1\r\nHost: {addr}\r\nAuthorization: Bearer test-token\r\nContent-Type: {content_type}\r\nContent-Length: 200000\r\n\r\n"
+    );
+    let partial = concat!(
+        "--probe\r\n",
+        "Content-Disposition: form-data; name=\"file\"; filename=\"report.pdf\"\r\n",
+        "Content-Type: application/pdf\r\n\r\n",
+        "%PDF-1.4 partial-upload"
+    );
+    let Ok(mut stream) = tokio::net::TcpStream::connect(addr).await else {
+        return;
+    };
+    let _ = stream.write_all(head.as_bytes()).await;
+    let _ = stream.write_all(partial.as_bytes()).await;
+    let _ = stream.flush().await;
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    drop(stream);
+    tokio::time::sleep(Duration::from_millis(400)).await;
+
+    let leftovers: Vec<_> = std::fs::read_dir(&temp)
+        .map(|entries| {
+            entries
+                .filter_map(Result::ok)
+                .map(|entry| entry.file_name())
+                .filter(|name| name.to_string_lossy().contains("-upload."))
+                .collect()
+        })
+        .unwrap_or_default();
+    assert!(
+        leftovers.is_empty(),
+        "中断的上传不应残留临时文件: {leftovers:?}"
+    );
+}
+
 /// 回归：首次提交失败（CUPS 拒绝）后，等待中的同键重试必须接管并成功——这正是
 /// 用户点「重试提交」的路径；旧行为只会一直返回 409，用户永远提交不上去。
 #[tokio::test]

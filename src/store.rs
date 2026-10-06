@@ -2,7 +2,7 @@
 //!
 //! 打印任务本身由 CUPS 排队与跟踪，这里只管理上传转换后的临时 PDF。
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
@@ -131,6 +131,53 @@ impl FileStore {
         }
     }
 
+    /// 清理临时目录里「未登记进本存储、且已超过 `ttl`」的残留文件与目录，
+    /// 返回清理数量。
+    ///
+    /// 上传请求可能在写入或转换途中被客户端断开/请求超时中断，此前的部分产物
+    /// （上传源文件、`LibreOffice` 配置目录等）从未登记进这里，TTL 清理看不到
+    /// 它们；长时间运行的容器会因此持续占用磁盘。按 mtime 兜底回收：mtime 在
+    /// TTL 之内的内容一律保留，因此不会误删正在处理的产物。
+    pub fn cleanup_orphans(&self, dir: &Path, ttl: Duration) -> usize {
+        let keep: HashSet<PathBuf> = self
+            .lock()
+            .values()
+            .map(|record| record.path.clone())
+            .collect();
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            return 0;
+        };
+        let mut removed = 0;
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if keep.contains(&path) {
+                continue;
+            }
+            // `DirEntry::metadata` 不跟随符号链接：符号链接按文件删除。
+            let Ok(metadata) = entry.metadata() else {
+                continue;
+            };
+            let Ok(modified) = metadata.modified() else {
+                continue;
+            };
+            let Ok(age) = std::time::SystemTime::now().duration_since(modified) else {
+                continue;
+            };
+            if age < ttl {
+                continue;
+            }
+            let outcome = if metadata.is_dir() {
+                std::fs::remove_dir_all(&path)
+            } else {
+                std::fs::remove_file(&path)
+            };
+            if outcome.is_ok() {
+                removed += 1;
+            }
+        }
+        removed
+    }
+
     /// 清理无引用且超过 TTL 的文件，返回删除数量。
     pub fn cleanup(&self, ttl: Duration) -> usize {
         let mut paths = Vec::new();
@@ -225,6 +272,53 @@ mod tests {
         );
         assert!(store.contains("new"), "未过期文件必须保留");
         assert!(!store.contains("old"));
+    }
+
+    /// 把目录项的修改时间推到过去，模拟被中断请求留下的旧残留。
+    fn age_entry(path: &std::path::Path, seconds: u64) {
+        let Ok(file) = std::fs::File::open(path) else {
+            return;
+        };
+        let now = std::time::SystemTime::now();
+        let when = now.checked_sub(Duration::from_secs(seconds)).unwrap_or(now);
+        let _ = file.set_modified(when);
+    }
+
+    #[test]
+    fn cleanup_orphans_removes_only_stale_unregistered_entries() {
+        // 回归：上传途中被中断（客户端断开 / 请求超时）会留下未登记的源文件与
+        // LibreOffice 配置目录，普通 TTL 清理看不到它们，磁盘只增不减。
+        let store = store();
+        let dir = std::env::temp_dir().join(format!("just-print-orphan-{}", crate::ids::new_id()));
+        assert!(std::fs::create_dir_all(&dir).is_ok());
+        let registered = dir.join("keep.pdf");
+        let orphan = dir.join("orphan.pdf");
+        let fresh = dir.join("fresh.pdf");
+        let profile = dir.join("lo-profile-abcd");
+        assert!(std::fs::write(&registered, b"%PDF-1.4").is_ok());
+        assert!(std::fs::write(&orphan, b"%PDF-1.4").is_ok());
+        assert!(std::fs::write(&fresh, b"%PDF-1.4").is_ok());
+        assert!(std::fs::create_dir_all(&profile).is_ok());
+        assert!(std::fs::write(profile.join("lock"), b"x").is_ok());
+        store.insert(
+            "f1".to_string(),
+            "keep.pdf".to_string(),
+            registered.clone(),
+            8,
+        );
+        age_entry(&orphan, 600);
+        age_entry(&profile, 600);
+
+        assert_eq!(
+            store.cleanup_orphans(&dir, Duration::from_secs(60)),
+            2,
+            "只应清理过期且未登记的残留"
+        );
+        assert!(registered.exists(), "已登记文件必须保留");
+        assert!(fresh.exists(), "未过期的新文件必须保留");
+        assert!(!orphan.exists(), "过期的未登记残留应被清理");
+        assert!(!profile.exists(), "过期的残留目录应被清理");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

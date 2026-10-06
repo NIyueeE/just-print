@@ -32,6 +32,41 @@ pub struct UploadResponse {
     pub size: u64,
 }
 
+/// 上传中间产物守卫。
+///
+/// 上传请求可能在写入或转换途中被中断（客户端断开、请求超时、multipart 解析
+/// 失败），此时源文件尚未登记进 [`FileStore`]，TTL 清理看不到它。守卫在请求
+/// 提前结束（含 future 被丢弃）时立即删除这些半成品，避免临时目录被慢慢吃掉。
+struct UploadArtifacts {
+    paths: Vec<PathBuf>,
+    committed: bool,
+}
+
+impl UploadArtifacts {
+    fn new(path: PathBuf) -> Self {
+        Self {
+            paths: vec![path],
+            committed: false,
+        }
+    }
+
+    /// 交出所有权：文件已登记进 `FileStore` 或已显式删除，析构时不再清理。
+    fn commit(&mut self) {
+        self.committed = true;
+    }
+}
+
+impl Drop for UploadArtifacts {
+    fn drop(&mut self) {
+        if self.committed {
+            return;
+        }
+        for path in &self.paths {
+            let _ = std::fs::remove_file(path);
+        }
+    }
+}
+
 /// 上传文件并转换为 PDF。
 pub async fn upload(
     State(state): State<Arc<AppState>>,
@@ -48,7 +83,7 @@ pub async fn upload(
         .map_err(|_| AppError::ServiceUnavailable("上传通道已关闭".to_string()))?;
 
     let id = ids::new_id();
-    let mut pending: Option<(String, PathBuf, u64)> = None;
+    let mut pending: Option<(String, PathBuf, u64, UploadArtifacts)> = None;
     // PDF 只校验魔数后原样返回，不启动 `LibreOffice`，因此也不占转换槽
     // （判定单一来源：`conversion::is_passthrough_extension`）。
     let mut passthrough = false;
@@ -70,11 +105,13 @@ pub async fn upload(
         }
         passthrough = conversion::is_passthrough_extension(&extension);
         let path = state.temp_dir.join(format!("{id}-upload.{extension}"));
+        // 守卫先生效：写入中途失败（含客户端断开）也不会留下半成品。
+        let artifacts = UploadArtifacts::new(path.clone());
         let size = write_field(&mut field, &path, state.config.max_upload_bytes).await?;
         // 必须先释放当前 field（multer 在同一时刻只允许一个 field 持有状态锁），
         // 否则后续 next_field() 会返回 "failed to lock multipart state"。
         drop(field);
-        pending = Some((name, path, size));
+        pending = Some((name, path, size, artifacts));
         // 读掉剩余的 multipart 部分，保持连接可复用。
         while multipart
             .next_field()
@@ -86,7 +123,7 @@ pub async fn upload(
     }
     drop(upload_permit);
 
-    let (name, source_path, original_size) =
+    let (name, source_path, original_size, mut artifacts) =
         pending.ok_or_else(|| AppError::BadRequest("缺少 file 字段".to_string()))?;
 
     // 只有真正要启动 soffice 的格式才排队转换槽。PDF 直通若也排进槽里，
@@ -132,6 +169,8 @@ pub async fn upload(
     state
         .files
         .insert(id.clone(), name.clone(), pdf_path, pdf_size);
+    // 转换产物已由 `FileStore` 接管（引用计数 + TTL），源码文件也已删除。
+    artifacts.commit();
     state.metrics.inc("uploads", &[("outcome", "ok")]);
     tracing::info!(file_id = %id, name = %name, size = original_size, "文档转换完成");
     Ok((

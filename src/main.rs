@@ -51,11 +51,16 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         loop {
             tokio::time::sleep(cleanup_interval).await;
             let removed = cleanup_state.files.cleanup(temp_ttl);
+            // 被中断的上传（客户端断开 / 请求超时）会留下未登记的半成品与
+            // LibreOffice 配置目录，上面按登记的清理看不到它们，这里兜底回收。
+            let orphans = cleanup_state
+                .files
+                .cleanup_orphans(&cleanup_state.temp_dir, temp_ttl);
             cleanup_state.idempotency.prune();
             cleanup_state.jobs.prune();
             refresh_gauges(&cleanup_state);
-            if removed > 0 {
-                info!(removed, "临时文件清理完成");
+            if removed > 0 || orphans > 0 {
+                info!(removed, orphans, "临时文件清理完成");
             }
         }
     });
