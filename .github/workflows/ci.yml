@@ -27,6 +27,13 @@ jobs:
   audit:
     name: Dependency audit
     runs-on: ubuntu-latest
+    # rustsec/audit-check 会把结果发布成 GitHub Check：只要出现一条信息级
+    # 警告（例如某个 crate 被 yank），它就会尝试创建 Check，而默认的
+    # `contents: read` 会让这一步以 "Resource not accessible by integration"
+    # 失败——即使 cargo-audit 报告 0 个漏洞。按该 Action 的文档补上 checks: write。
+    permissions:
+      contents: read
+      checks: write
     steps:
       - uses: actions/checkout@v5
       - uses: rustsec/audit-check@v2
