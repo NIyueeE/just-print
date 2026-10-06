@@ -32,6 +32,8 @@ pub const DEFAULT_PRINTER_CACHE_TTL: Duration = Duration::from_secs(10);
 pub const DEFAULT_JOB_CACHE_TTL: Duration = Duration::from_secs(2);
 /// 幂等键保留时长。
 pub const DEFAULT_IDEMPOTENCY_TTL: Duration = Duration::from_mins(10);
+/// 同键重试等待在途请求完成的最长时间。
+pub const DEFAULT_IDEMPOTENCY_WAIT: Duration = Duration::from_secs(15);
 /// 并发上传上限。
 pub const DEFAULT_UPLOAD_SLOTS: usize = 4;
 /// 单个 HTTP 请求处理超时。
@@ -68,6 +70,8 @@ pub struct Config {
     pub job_cache_ttl: Duration,
     /// 幂等键保留时长。
     pub idempotency_ttl: Duration,
+    /// 同键重试等待在途请求完成的最长时间。
+    pub idempotency_wait: Duration,
     /// 并发上传上限。
     pub upload_slots: usize,
     /// 单个 HTTP 请求处理超时。
@@ -124,6 +128,10 @@ impl Config {
             idempotency_ttl: env_duration(
                 "JUST_PRINT_IDEMPOTENCY_TTL_SECS",
                 DEFAULT_IDEMPOTENCY_TTL,
+            )?,
+            idempotency_wait: env_duration(
+                "JUST_PRINT_IDEMPOTENCY_WAIT_SECS",
+                DEFAULT_IDEMPOTENCY_WAIT,
             )?,
             upload_slots: env_usize("JUST_PRINT_UPLOAD_SLOTS", DEFAULT_UPLOAD_SLOTS)?,
             request_timeout: env_duration(

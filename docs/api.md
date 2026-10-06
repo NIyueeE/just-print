@@ -188,8 +188,13 @@ UUID）：
   内只产生一个 CUPS 任务；后续请求回放首次响应，并带
   `Idempotency-Replayed: true`。
 - 同一键 + 不同负载返回 `409 idempotency_conflict`。
-- 同一键的首次请求仍在处理中时返回 `409 idempotency_conflict` 与
-  `Retry-After: 1`。
+- 同一键 + 相同负载且首次请求仍在处理中时，服务端会在
+  `JUST_PRINT_IDEMPOTENCY_WAIT_SECS`（默认 15 秒）内等待它结束：首次请求成功则
+  回放其结果（同样带 `Idempotency-Replayed: true`），首次请求失败则本次请求接管
+  重试；等待超时才返回 `409 idempotency_conflict` 与 `Retry-After: 1`。
+- **客户端断开不会让提交消失**：`Print-Job` 已受理后即使连接中断（浏览器超时、
+  页面挂久后连接失效、关闭标签页），服务端仍会把任务提交完并把结果写入幂等键，
+  后续同键重试回放同一个 CUPS 任务，不会重复出纸，也不会一直冲突。
 - 提交超时或连接失败时，服务端会用写入 `job-name` 的唯一标记在 CUPS 中找回
   已创建的任务，避免重复出纸。
 - 不携带该头时每次请求都会创建一个新任务。

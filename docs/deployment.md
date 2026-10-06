@@ -93,6 +93,7 @@ Tmpfs=/tmp
 | `JUST_PRINT_PRINTER_CACHE_SECS` | `10` | 打印机快照缓存时长（秒） |
 | `JUST_PRINT_JOB_CACHE_SECS` | `2` | 任务状态缓存时长（秒） |
 | `JUST_PRINT_IDEMPOTENCY_TTL_SECS` | `600` | 幂等键保留时长（秒） |
+| `JUST_PRINT_IDEMPOTENCY_WAIT_SECS` | `15` | 同键重试等待在途请求完成的最长时间（秒）；超时才回 `409` + `Retry-After` |
 | `JUST_PRINT_REQUEST_TIMEOUT_SECS` | `300` | 单个 HTTP 请求处理超时（秒） |
 | `RUST_LOG` | `info` | tracing 日志过滤（如 `just_print=debug`） |
 

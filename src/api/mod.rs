@@ -129,6 +129,7 @@ mod tests {
             printer_cache_ttl: Duration::from_secs(10),
             job_cache_ttl: Duration::from_secs(2),
             idempotency_ttl: Duration::from_mins(10),
+            idempotency_wait: Duration::from_secs(5),
             upload_slots: 4,
             request_timeout: Duration::from_mins(5),
         }
