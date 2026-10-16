@@ -9,7 +9,7 @@
 | --- | --- |
 | `just` / `just check` | 后端 + 前端完整检查 |
 | `just backend` | 格式检查（fmt）+ 静态检查（clippy）+ 测试 |
-| `just frontend` | 依赖校验（frozen-lockfile）+ 类型检查 + lint + 单元测试 + 生产构建 |
+| `just frontend` | 依赖校验（frozen-lockfile）+ 类型检查 + lint + 格式 + 单元测试 + 生产构建 |
 | `just shell` | 入口脚本语法检查 + PPD 匹配/选项解析的纯逻辑测试 |
 | `just container` | 用 podman 或 docker 构建本地镜像 |
 | `just debug` | 构建并以 `JUST_PRINT_CUPS_PDF=1` 前台运行调试容器（需先设置 `JUST_PRINT_TOKEN`） |
@@ -18,15 +18,88 @@
 开发服务器会把 `/api` 代理到 `http://localhost:8080`，联调接口时先启动后端
 （`cargo run` 或 `just debug`）并设置 `JUST_PRINT_TOKEN`。
 
+## 门禁分层：轻门 / 重门
+
+本地 git 钩子与远端 CI 复用**同一套入口脚本**（`scripts/` 目录），不会出现
+「本地过了、CI 挂了」或反之的漂移。分层的目的是把快的检查留在本地：
+
+| 层 | 入口 | 内容 | 触发时机 |
+| --- | --- | --- | --- |
+| 轻门 | `just gate-light` → `scripts/gate-light.sh` | 仓库卫生、typos、`cargo fmt --check`、prettier、eslint、shellcheck、入口逻辑测试、actionlint、hadolint、zizmor | 每次 `git commit`（pre-commit） |
+| 重门 | `just gate-heavy` → `scripts/gate-heavy.sh` | `just check`（fmt + clippy + cargo test + 前端构建）+ `scripts/smoke.sh` 容器冒烟 | 每次 `git push`（pre-push） |
+
+```bash
+# 手动跑某一层
+just gate-light
+just gate-heavy
+```
+
+环境变量：
+
+| 变量 | 说明 |
+| --- | --- |
+| `PROBE=strict` | 工具缺失视为失败（CI 里设置；本地缺工具只打 `skip`） |
+| `JUST_SKIP_HOOKS=1` | 跳过本次钩子（应急用，勿用于日常） |
+| `JUST_HOOK_LIGHT=0` | 本次提交改用重门（等价 pre-push 的强度） |
+
+### 本地需要的工具
+
+| 工具 | 轻门用途 | 缺失时 |
+| --- | --- | --- |
+| `just`、`cargo`、`bun` | 必需 | 钩子直接报错 |
+| `typos` | 拼写检查 | 本地跳过，CI 失败 |
+| `shellcheck` | 入口脚本静态检查 | 本地跳过，CI 失败 |
+| `actionlint` | workflow lint | 本地跳过，CI 失败 |
+| `hadolint` | Containerfile lint | 本地跳过，CI 失败 |
+| `zizmor` | workflow 安全审计 | 本地跳过，CI 失败 |
+| `podman` 或 `docker` | 重门冒烟 | 本地跳过，CI 失败 |
+
+安装示例（二进制直装，无需包管理器）：
+
+```bash
+mkdir -p ~/.local/bin
+# typos
+curl -fsSL "$(curl -fsSL https://api.github.com/repos/crate-ci/typos/releases/latest \
+  | jq -r .tag_name | sed 's|^|https://github.com/crate-ci/typos/releases/download/|')" \
+  | tar -xz -C ~/.local/bin ./typos
+# shellcheck / actionlint / hadolint 同理（见各自 release 资产名）
+uv tool install zizmor   # 或 pip install --user zizmor
+```
+
 ## 提交钩子
 
-首次克隆后执行一次以下命令，即可让每次 `git commit` 前自动运行 `just check`：
+首次克隆后执行一次以下命令，即可启用钩子（pre-commit 跑轻门、pre-push 跑
+重门、commit-msg 校验提交信息约定）：
 
 ```bash
 just init-hooks
 ```
 
-钩子脚本位于 `.githooks/pre-commit`，随仓库一起维护；检查失败时提交会被中止。
+钩子脚本位于 `.githooks/`，随仓库一起维护；检查失败时提交/推送会被中止。
+卸载用 `just remove-hooks`。
+
+设计意图是**本地先拦一道**：轻门几十秒内反馈格式/拼写/ lint 问题，重门在
+推送前把完整构建、单元测试与容器端到端都跑掉；远端 CI 再跑同一套作最终兜底
+（见 [CI 门禁](#ci-门禁)）。想临时越过门禁时用 `JUST_SKIP_HOOKS=1 git commit`，
+但请在提交信息里说明原因。
+
+## CI 门禁
+
+`.github/workflows/ci.yml` 与本地共用 `scripts/` 下的入口脚本：
+
+| CI 作业 | 等价本地命令 |
+| --- | --- |
+| `Lint (gate-light)` | `PROBE=strict just gate-light` |
+| `Check (gate-heavy …)` | `PROBE=strict scripts/gate-heavy.sh --no-smoke` |
+| `Smoke (gate-heavy …)` | `PROBE=strict scripts/smoke.sh` |
+| `Dependency audit` | `just audit`（Rust advisory + license、前端 npm） |
+| `Build image` | `just container` + Trivy 镜像漏洞扫描 |
+| `Validate compose example` | `docker compose -f examples/compose.yaml config` |
+| `Gate summary` | 汇总作业：分支保护只勾选它即可覆盖全部门禁 |
+
+`release.yml` 以**上游模式**（`uses: ./.github/workflows/ci.yml`）复用同一份
+CI：推 tag 时先跑完整门禁，通过后才构建推送镜像并创建 GitHub Release，
+不会出现「tag 绕过检查链直接发布」。
 
 ## 代码组织
 

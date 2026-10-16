@@ -1,4 +1,14 @@
 #!/usr/bin/env bash
+# pre-commit：本地轻门。跑不过不许把问题推到远端 CI。
+#
+# 与 CI 的对齐：这里跑的就是 CI「lint / 快速检查」那条路径（scripts/gate-light.sh
+# 由 just gate-light 调用），含 typos / prettier / eslint / actionlint /
+# hadolint / zizmor / hygiene / 入口脚本逻辑测试。完整 check（clippy、cargo
+# test、vite build）与容器冒烟在 pre-push 的 just gate-heavy 里跑。
+#
+# 环境变量：
+#   JUST_SKIP_HOOKS=1    跳过本钩子（`git commit` 时临时豁免，勿用于日常）
+#   JUST_HOOK_LIGHT=0    本次提交改用重门（与 pre-push 相同）
 set -euo pipefail
 
 repo_root="$(git rev-parse --show-toplevel)"
@@ -9,4 +19,14 @@ if ! command -v just >/dev/null 2>&1; then
     exit 1
 fi
 
-exec just check
+if [ "${JUST_SKIP_HOOKS:-}" = "1" ]; then
+    printf '%s\n' "hooks: SKIP (JUST_SKIP_HOOKS=1)" >&2
+    exit 0
+fi
+
+if [ "${JUST_HOOK_LIGHT:-1}" = "0" ]; then
+    exec just gate-heavy
+fi
+
+echo "hooks: pre-commit -> just gate-light (轻门)"
+exec just gate-light

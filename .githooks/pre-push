@@ -1,0 +1,24 @@
+#!/usr/bin/env bash
+# pre-push：本地重门。把完整检查链 + 容器冒烟放在推送前，
+# 尽量在本地拦一道再让远端 CI 跑（CI 的 check / smoke 作业与这里共用
+# just gate-heavy，所以本地通过 ≈ CI 通过）。
+#
+# 环境变量：
+#   JUST_SKIP_HOOKS=1    跳过本钩子（勿用于日常；应急 push 用）
+set -euo pipefail
+
+repo_root="$(git rev-parse --show-toplevel)"
+cd "$repo_root"
+
+if ! command -v just >/dev/null 2>&1; then
+    printf '%s\n' "error: 'just' is not installed. See https://github.com/casey/just" >&2
+    exit 1
+fi
+
+if [ "${JUST_SKIP_HOOKS:-}" = "1" ]; then
+    printf '%s\n' "hooks: SKIP (JUST_SKIP_HOOKS=1)" >&2
+    exit 0
+fi
+
+echo "hooks: pre-push -> just gate-heavy (重门)"
+exec just gate-heavy

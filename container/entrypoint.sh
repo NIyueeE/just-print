@@ -31,6 +31,9 @@ fi
 # 调试打印机：cups-pdf（无真实打印机环境下的端到端验证）。
 if [ "${JUST_PRINT_CUPS_PDF:-0}" = "1" ]; then
   # 固定输出目录，便于在容器内直接检查生成的 PDF。
+  # ${USER} 故意不用 shell 展开：这是 cups-pdf.conf 自己的变量，运行时按提交
+  # 作业的用户（容器内为 lp）解析。shellcheck 的 SC2016 在这里是误报，显式豁免。
+  # shellcheck disable=SC2016
   sed -i 's|^Out .*|Out /var/spool/cups-pdf/${USER}|' /etc/cups/cups-pdf.conf
   if ! lpstat -p CUPS-PDF >/dev/null 2>&1; then
     lpadmin -p CUPS-PDF -E -v cups-pdf:/ -m lsb/usr/cups-pdf/CUPS-PDF_opt.ppd

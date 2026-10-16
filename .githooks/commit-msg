@@ -1,0 +1,14 @@
+#!/usr/bin/env bash
+# commit-msg：校验提交信息是否符合 Conventional Commits。
+# 与 pre-commit / pre-push 一样轻，纯字符串检查，无工具依赖。
+set -euo pipefail
+
+repo_root="$(git rev-parse --show-toplevel)"
+cd "$repo_root"
+
+if [ "${JUST_SKIP_HOOKS:-}" = "1" ]; then
+    printf '%s\n' "hooks: SKIP (JUST_SKIP_HOOKS=1)" >&2
+    exit 0
+fi
+
+exec scripts/check-commit-msg.sh "$1"

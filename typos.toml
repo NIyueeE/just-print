@@ -1,0 +1,16 @@
+# typos 拼写检查配置（scripts/gate-light.sh 调用）。
+# 只放行「项目里有意的拼写」：设备/驱动/格式名等专有名词与 IPP 术语。
+# 规则：
+#   extend-words            允许某个词（大小写不敏感，匹配后跳过检查）
+#   extend-ignore-words-re  用正则放行一类词
+# 生成物（Cargo.lock / bun.lock）不逐条豁免，改用 --exclude 在调用处排除。
+[default]
+# 仓库里刻意保留的拼写 / 术语（误报豁免）
+extend-words = { Apollo = "Apollo" }
+
+# 用正则放行一类「看起来像拼写错误但实际正确」的词：
+#  - hpcups 的 drv:/// PPD 型号路径（p4014dn 等）
+extend-ignore-words-re = [
+    "Apollo",
+    "p[0-9]{4}dn",
+]

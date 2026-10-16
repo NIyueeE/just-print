@@ -49,7 +49,21 @@ Podman 只需将 `docker` 换成 `podman`。更多部署方式见
 - [Web API v1](docs/api.md)
 - [部署指南](docs/deployment.md)
 - [架构与实现](docs/architecture.md)
-- [本地开发与检查](docs/development.md)
+- [本地开发与检查](docs/development.md)（门禁分层、git 钩子、CI 对齐）
+
+## 开发门禁
+
+本地与 CI 共用同一套入口脚本，分层拦问题：
+
+```bash
+just init-hooks   # 一次性启用钩子
+# pre-commit  -> 轻门（卫生 / typos / 格式 / lint / shellcheck / CI 配置 lint）
+# pre-push    -> 重门（完整 check + 容器冒烟）
+```
+
+CI 以**上游模式**复用同一份定义（`release.yml` 通过 `workflow_call` 调用
+`ci.yml`），推 tag 发布前必须先过全部门禁。详见
+[docs/development.md](docs/development.md#门禁分层轻门--重门)。
 
 ## License
 

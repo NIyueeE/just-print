@@ -3,6 +3,9 @@
 # 候选 PPD 校验。由 `just shell` / CI 调用。
 set -eu
 
+# `CDPATH=` 前置是为了屏蔽用户 CDPATH 对 cd 的影响，等号后故意留空格
+# （shellcheck 本条在此为误报，已在下一行豁免）。
+# shellcheck disable=SC1007
 script_dir="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
 entrypoint="$script_dir/entrypoint.sh"
 
@@ -82,11 +85,12 @@ expect_false ppd_line_matches_device "$HP4014" HP "LaserJet 4000"
 expect_true ppd_line_matches_device "$APOLLO" Apollo "Apollo 2100"
 
 # 选项解析：逗号与空格混用、空值
-JUST_PRINT_USB_OPTIONS='OptionDuplex=True,Option1=True'
+# export 让 shellcheck 知道这些变量会被被 source 进来的函数读取（SC2034）。
+export JUST_PRINT_USB_OPTIONS='OptionDuplex=True,Option1=True'
 expect "逗号分隔选项" "$(usb_extra_options)" "OptionDuplex=True Option1=True"
-JUST_PRINT_USB_OPTIONS='OptionDuplex=True Option1=True'
+export JUST_PRINT_USB_OPTIONS='OptionDuplex=True Option1=True'
 expect "空格分隔选项" "$(usb_extra_options)" "OptionDuplex=True Option1=True"
-JUST_PRINT_USB_OPTIONS=''
+export JUST_PRINT_USB_OPTIONS=''
 expect "空选项" "$(usb_extra_options)" ""
 
 if [ "$failures" -ne 0 ]; then

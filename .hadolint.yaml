@@ -1,0 +1,11 @@
+# hadolint 配置：与 Containerfile 的现状对齐（每条 ignored 都写明理由）。
+# 被忽略的规则都是「当前有意为之」的取舍，而不是随手关掉：
+#  - DL3008  pin 版本：运行时镜像的 apt 包走 Debian trixie 稳定源，
+#                        锁定到具体版本会阻塞安全更新，违背「最小镜像」意图。
+#  - DL3013  pin pip 版本：CI 里安装 zizmor 只用于审计，非运行时依赖。
+#  - DL3059  多 RUN 层标记：本项目交付的是完整运行时（CUPS/LibreOffice），
+#                        并非 distroless 场景，多容器层是设计的一部分。
+ignored:
+  - DL3008
+  - DL3013
+  - DL3059

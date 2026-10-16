@@ -30,13 +30,17 @@ in-container CUPS queue for printing. Linux-only; the OCI image built from
 Requires `just`, Rust, and Bun; container builds need Podman or Docker.
 
 - `just check` – full backend + frontend validation (the CI job).
+- `just gate-light` – light gate (fast local gate: hygiene, typos, fmt/prettier/eslint, shellcheck, entrypoint logic tests, actionlint/hadolint/zizmor). Runs on pre-commit.
+- `just gate-heavy` – heavy gate (`just check` + `scripts/smoke.sh` container smoke). Runs on pre-push.
 - `just backend` – `cargo fmt --check`, clippy `--all-targets --all-features -D warnings`, `cargo test --all-features`.
-- `just frontend` – frozen-lockfile install (`bun install --frozen-lockfile`) + `bun run typecheck` + `bun run lint` + `bun run test:run` + `bun run build`.
+- `just frontend` – frozen-lockfile install (`bun install --frozen-lockfile`) + `bun run typecheck` + `bun run lint` + `bun run format:check` + `bun run test:run` + `bun run build`.
+- `just audit` – dependency advisories/licenses (Rust + npm). Set `PROBE=strict` to fail when the tool is missing (CI).
 - `just container` – build local image `ghcr.io/niyueee/just-print:local` (auto-selects podman or docker).
 - `just debug` – build and run a foreground container with `JUST_PRINT_CUPS_PDF=1`; requires `JUST_PRINT_TOKEN` set first.
-- `just init-hooks` – `git config core.hooksPath .githooks` so the pre-commit hook runs `just check` on every commit.
+- `just init-hooks` – `git config --local core.hooksPath .githooks` so pre-commit runs the light gate, pre-push the heavy gate, and commit-msg validates Conventional Commits. `just remove-hooks` undoes it.
 - `cd frontend && bun run dev` – Vite dev server proxying `/api` to `http://localhost:8080`; run the backend (`cargo run` with `JUST_PRINT_TOKEN` set, or `just debug`) for API work.
 - Visual UI walk-through without CUPS/LibreOffice on the host (mock API + headless Chromium/Playwright + imageread) is documented in `docs/development.md` under "前端视觉检查（无容器环境）".
+- **Gate layers**: local hooks (`scripts/gate-light.sh`, `scripts/gate-heavy.sh`, `scripts/smoke.sh`) and `.github/workflows/ci.yml` share the same scripts, so a local heavy-gate pass matches CI; `release.yml` reuses CI via `workflow_call` (upstream mode).
 
 ## Coding Style & Naming Conventions
 
