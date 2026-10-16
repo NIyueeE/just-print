@@ -46,6 +46,13 @@ run_tool typos typos --format brief --exclude Cargo.lock --exclude frontend/bun.
 step "Rust 格式（cargo fmt --check）"
 cargo fmt --all -- --check
 
+# 前端工具（prettier / eslint / tsc / vitest）都来自 node_modules/.bin。
+# `bun run` 只有在该目录存在时才会把它加进 PATH；本地仓库通常已经装过，
+# 而 CI 的 lint 作业不经过 `just check`（那里才跑 bun install），必须在这里
+# 补一次。--frozen-lockfile 保证与 lockfile 完全一致，重复执行是幂等的。
+step "前端依赖（frozen-lockfile）"
+(cd frontend && bun install --frozen-lockfile)
+
 step "前端格式（prettier --check）"
 (cd frontend && bun run format:check)
 
