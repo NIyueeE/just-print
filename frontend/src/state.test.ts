@@ -8,7 +8,9 @@ import {
   deriveJobCounts,
   deriveSteps,
   isActiveJobStatus,
+  MAX_ACTIVE_JOB_VIEWS,
   MAX_JOB_AGE_MS,
+  MAX_JOB_VIEWS,
   pruneJobs,
   type AppState,
 } from './state'
@@ -118,6 +120,35 @@ describe('上传状态机', () => {
     state = appReducer(state, { type: 'upload/reset' })
     expect(state.upload.phase).toBe('empty')
   })
+
+  // 回归：关闭错误提示曾用 upload/select 实现，会把已经转换好的 PDF、预览
+  // 与服务端文件引用一并清空（emptyUpload()），用户不得不重新上传一次。
+  it('dismissing an error keeps an already converted document', () => {
+    let state = reduce(
+      { type: 'upload/select', file: new File(['x'], 'a.pdf') },
+      { type: 'upload/success', result: { id: 'file-1', name: 'a.pdf', size: 1 } },
+      { type: 'upload/preview-ready', url: 'blob:preview' },
+    )
+    // 第二次上传失败（例如超时）在已有成功结果上报错。
+    state = appReducer(state, { type: 'upload/error', message: '上传超时，请重试。' })
+    expect(state.upload.error).toBe('上传超时，请重试。')
+
+    state = appReducer(state, { type: 'upload/error-dismiss' })
+    expect(state.upload.error).toBeNull()
+    expect(state.upload.phase).toBe('ready')
+    expect(state.upload.result).toEqual({ id: 'file-1', name: 'a.pdf', size: 1 })
+    expect(state.upload.previewUrl).toBe('blob:preview')
+    expect(state.upload.file).not.toBeNull()
+  })
+
+  it('dismissing an error without a result returns to the selection step', () => {
+    let state = reduce({ type: 'upload/select', file: new File(['x'], 'a.pdf') })
+    state = appReducer(state, { type: 'upload/error', message: '不支持 .log 格式' })
+    state = appReducer(state, { type: 'upload/error-dismiss' })
+    expect(state.upload.error).toBeNull()
+    expect(state.upload.phase).toBe('selected')
+    expect(state.upload.result).toBeNull()
+  })
 })
 
 describe('打印机与默认选项', () => {
@@ -171,6 +202,24 @@ describe('任务视图', () => {
     const pruned = pruneJobs([stale, fresh, active], now)
     expect(pruned.map((view) => view.id).sort()).toEqual(['active', 'fresh'])
     expect(isActiveJobStatus(active.status)).toBe(true)
+  })
+
+  // 回归：CUPS 队列卡住时任务一直停在 queued/printing，active 曾可以无限
+  // 占满 MAX_JOB_VIEWS，把刚打完的任务挤出列表（`MAX_JOB_VIEWS - active.length`
+  // 裁成 0），用户看不到刚完成的任务、卡住的任务却占着版面。
+  it('keeps finished jobs visible when active jobs pile up', () => {
+    const now = 10 * MAX_JOB_AGE_MS
+    const stuck = Array.from({ length: MAX_JOB_VIEWS + 10 }, (_, index) =>
+      job({ id: `stuck-${index}`, status: 'queued', created_at_ms: now - index }),
+    )
+    const finished = job({ id: 'done', status: 'completed', created_at_ms: now - 1 })
+    const pruned = pruneJobs([...stuck, finished], now)
+    expect(pruned.some((view) => view.id === 'done')).toBe(true)
+    expect(pruned.length).toBeLessThanOrEqual(MAX_JOB_VIEWS)
+    // 进行中被独立上限截断，剩下的位置留给已结束任务。
+    expect(pruned.filter((view) => isActiveJobStatus(view.status)).length).toBe(
+      MAX_ACTIVE_JOB_VIEWS,
+    )
   })
 })
 

@@ -19,6 +19,14 @@ import { deriveDefaults } from './options'
 /** 任务视图上限，防止长时间轮询导致内存增长。 */
 export const MAX_JOB_VIEWS = 50
 export const MAX_FINISHED_JOB_VIEWS = 30
+/**
+ * 进行中任务的上限：必须明显小于 `MAX_JOB_VIEWS`。
+ * CUPS 队列卡住（打印机脱机、缺纸、驱动挂起）时任务会一直停在
+ * queued/printing；若进行中没有独立上限，它会占满整个 `MAX_JOB_VIEWS`，
+ * 已结束的任务被 `MAX_JOB_VIEWS - active.length` 裁成 0——用户刚打完的
+ * 任务从列表里消失，卡住的旧任务却一直占着版面。
+ */
+export const MAX_ACTIVE_JOB_VIEWS = 20
 export const MAX_JOB_AGE_MS = 24 * 60 * 60 * 1000
 
 /* -------------------------------------------------------------------------- */
@@ -161,6 +169,7 @@ export type Action =
   | { type: 'upload/converting' }
   | { type: 'upload/success'; result: UploadResult }
   | { type: 'upload/error'; message: string }
+  | { type: 'upload/error-dismiss' }
   | { type: 'upload/reset' }
   | { type: 'upload/preview-loading' }
   | { type: 'upload/preview-ready'; url: string }
@@ -211,11 +220,15 @@ export function mergeJobs(existing: readonly JobView[], incoming: readonly JobVi
 
 export function pruneJobs(views: readonly JobView[], now: number = Date.now()): JobView[] {
   const sorted = [...views].sort((a, b) => b.created_at_ms - a.created_at_ms)
+  // active 也设上限（见 MAX_ACTIVE_JOB_VIEWS 的说明）：CUPS 队列卡住时任务
+  // 会一直停在 queued/printing，不设限就会把 finished 整个挤出列表。
   const active: JobView[] = []
   const finished: JobView[] = []
   for (const job of sorted) {
     if (isActiveJobStatus(job.status)) {
-      active.push(job)
+      if (active.length < MAX_ACTIVE_JOB_VIEWS) {
+        active.push(job)
+      }
       continue
     }
     if (now - job.created_at_ms > MAX_JOB_AGE_MS) {
@@ -372,6 +385,24 @@ export function appReducer(state: AppState, action: Action): AppState {
 
     case 'upload/error':
       return { ...state, upload: { ...state.upload, phase: 'error', error: action.message } }
+
+    case 'upload/error-dismiss':
+      // 关闭错误提示必须保留当前内容：第二次上传失败时，第一次已经转换好的
+      // PDF 与预览仍然有效（服务端文件有 30 分钟 TTL），一并清掉会让用户
+      // 白白重新上传一次。按已有结果回到对应阶段，而不是 emptyUpload()。
+      return {
+        ...state,
+        upload: {
+          ...state.upload,
+          error: null,
+          phase:
+            state.upload.result !== null
+              ? 'ready'
+              : state.upload.file !== null
+                ? 'selected'
+                : 'empty',
+        },
+      }
 
     case 'upload/reset':
       return { ...state, upload: emptyUpload() }

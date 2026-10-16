@@ -93,7 +93,7 @@ const IMAGE_EXTS = new Set([
   'pgm',
   'ppm',
 ])
-const TEXT_EXTS = new Set(['txt', 'md', 'htm', 'html', 'xhtml', 'xml', 'log'])
+const TEXT_EXTS = new Set(['txt', 'md', 'htm', 'html', 'xhtml', 'xml'])
 
 const CATEGORY_LABEL: Record<FileCategory, string> = {
   pdf: 'PDF',
@@ -547,7 +547,7 @@ export function Uploader() {
             type="button"
             class="uploader__dismiss"
             aria-label="关闭错误提示"
-            onClick={() => dispatch({ type: 'upload/select', file: upload.file })}
+            onClick={() => dispatch({ type: 'upload/error-dismiss' })}
           >
             <XIcon size={14} />
           </button>

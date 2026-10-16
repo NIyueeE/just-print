@@ -119,6 +119,8 @@ export function JobList() {
   const terminalCount = counts.completed + counts.failed + counts.canceled + counts.unknown
 
   // 3 秒轮询进行中的任务；请求不重叠（usePolling 内部守卫）、可中断、失败退避。
+  // token 为空（已退出登录）时一并停轮：否则登出后仍会带着空令牌继续请求，
+  // 每次轮询都撞一次 401。
   usePolling(
     async (signal) => {
       dispatch({ type: 'jobs/polling', value: true })
@@ -167,7 +169,12 @@ export function JobList() {
         dispatch({ type: 'jobs/polling', value: false })
       }
     },
-    { intervalMs: 3000, enabled: hasActive, backoffBaseMs: 2000, backoffMaxMs: 30_000 },
+    {
+      intervalMs: 3000,
+      enabled: hasActive && state.token !== '',
+      backoffBaseMs: 2000,
+      backoffMaxMs: 30_000,
+    },
   )
 
   if (jobs.views.length === 0 && jobs.lastError === null) {
