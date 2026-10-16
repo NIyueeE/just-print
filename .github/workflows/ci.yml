@@ -27,6 +27,9 @@ concurrency:
 
 env:
   CARGO_TERM_COLOR: always
+  # 门禁工具版本：hadolint 固定在具体版本，避免「latest 漂移」让本地通过而
+  # CI 上报新规则（DL3025 就是这么红的）。本地对齐方式见 docs/development.md。
+  HADOLINT_VERSION: v2.15.1
 
 jobs:
   # ------------------------------------------------------------ 轻门作业
@@ -53,16 +56,20 @@ jobs:
           set -euo pipefail
           # 各工具用固定 release 版本安装，与 docs/development.md 记录的一致。
           # typos / actionlint / hadolint 是静态二进制，直接落在 /usr/local/bin。
+          # typos 与 actionlint 跟随 latest（纯字符串/静态检查，新版只增规则）；
+          # hadolint 固定在 HADOLINT_VERSION：它曾因「latest 漂移」在本地通过、
+          # CI 上报新规则（DL3025）而红——门禁的输入必须可复现。
+          # 本地对齐：见 docs/development.md 的门禁工具版本表。
           tyver="$(curl -fsSL https://api.github.com/repos/crate-ci/typos/releases/latest | jq -r .tag_name)"
           curl -fsSL "https://github.com/crate-ci/typos/releases/download/${tyver}/typos-${tyver}-x86_64-unknown-linux-musl.tar.gz" \
             | tar -xz -C /usr/local/bin ./typos
           alver="$(curl -fsSL https://api.github.com/repos/rhysd/actionlint/releases/latest | jq -r .tag_name)"
           curl -fsSL "https://github.com/rhysd/actionlint/releases/download/${alver}/actionlint_${alver#v}_linux_amd64.tar.gz" \
             | tar -xz -C /usr/local/bin actionlint
-          hlver="$(curl -fsSL https://api.github.com/repos/hadolint/hadolint/releases/latest | jq -r .tag_name)"
-          curl -fsSL "https://github.com/hadolint/hadolint/releases/download/${hlver}/hadolint-Linux-x86_64" \
+          curl -fsSL "https://github.com/hadolint/hadolint/releases/download/${HADOLINT_VERSION}/hadolint-Linux-x86_64" \
             -o /usr/local/bin/hadolint
           chmod +x /usr/local/bin/hadolint
+          hadolint --version
           # zizmor：GitHub Actions 安全审计，pip 安装到用户目录。
           python3 -m pip install --user zizmor
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"

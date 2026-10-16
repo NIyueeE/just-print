@@ -54,7 +54,9 @@ ENV JUST_PRINT_CUPS_URI=http://127.0.0.1:631
 EXPOSE 8080
 
 # 就绪探针 /readyz 会真实查询 CUPS；CUPS 不可用时容器标记为 unhealthy。
+# 用 exec 形式而不是 `sh -c`：hadolint DL3025 要求 JSON 记法，且探针每 30 秒
+# 跑一次，少起一个 shell 进程。
 HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \
-    CMD sh -c 'curl -fsS http://127.0.0.1:8080/readyz >/dev/null'
+    CMD ["curl", "-fsS", "http://127.0.0.1:8080/readyz"]
 
 ENTRYPOINT ["/usr/local/bin/just-print-entrypoint"]

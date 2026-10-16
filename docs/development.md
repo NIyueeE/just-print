@@ -66,6 +66,12 @@ curl -fsSL "$(curl -fsSL https://api.github.com/repos/crate-ci/typos/releases/la
 uv tool install zizmor   # 或 pip install --user zizmor
 ```
 
+**版本对齐**：`hadolint` 的规则集会随版本增长，CI 把它固定在
+`HADOLINT_VERSION`（见 [ci.yml](../.github/workflows/ci.yml) 顶部 env，当前
+v2.15.1）。本地装其他版本可能出现「本地过、CI 红」或反之——曾因 latest 漂移
+在 CI 上报出新规则 DL3025 而红。装同版本即可复现 CI 结果。`typos` 与
+`actionlint` 跟随 latest（新版只增规则，不影响既有结论），无需固定。
+
 ## 提交钩子
 
 首次克隆后执行一次以下命令，即可启用钩子（pre-commit 跑轻门、pre-push 跑
