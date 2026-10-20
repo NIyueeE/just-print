@@ -23,6 +23,10 @@ Docker and Podman.
   not produce duplicate prints and a lost response is reconciled via `job-name`.
 - Job list, status and cancel endpoints; a complete upload → preview → print →
   retry loop.
+- A built-in MCP endpoint: Claude Code and Cursor can inspect the device, upload
+  a PDF and submit it for printing from the terminal. One connection is bound to
+  one printer, file bytes travel through a one-time ticket, and the token never
+  enters the model context (see [docs/mcp.md](docs/mcp.md)).
 - Markdown prints as rendered documents: headings, code blocks, tables and
   blockquotes are laid out as a document instead of raw source text.
 - Bundled Chinese (Noto CJK) and Symbola emoji fonts, so emoji never render as
@@ -61,6 +65,7 @@ extension list is in [docs/api.md](docs/api.md).
 ## Documentation
 
 - [Web API v1](docs/api.md)
+- [MCP integration](docs/mcp.md)
 - [Deployment guide](docs/deployment.md)
 - [Architecture](docs/architecture.md)
 - [Local development](docs/development.md)

@@ -11,9 +11,11 @@ mod error;
 mod idempotency;
 mod ids;
 mod jobs;
+mod mcp;
 mod metrics;
 mod state;
 mod store;
+mod tickets;
 
 use std::process::ExitCode;
 use std::sync::Arc;

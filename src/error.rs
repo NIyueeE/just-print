@@ -21,6 +21,9 @@ pub enum AppError {
     /// 任务不存在或已被 CUPS 清理。
     #[error("任务不存在或已失效（可能已被 CUPS 清理）")]
     JobNotFound,
+    /// 上传票据无效、已过期或已被使用。
+    #[error("上传票据无效、已过期或已被使用")]
+    InvalidTicket,
     /// 请求的 API 接口不存在。
     #[error("接口不存在")]
     NotFound,
@@ -83,7 +86,7 @@ impl AppError {
     /// 错误对应的 HTTP 状态码。
     fn status(&self) -> StatusCode {
         match self {
-            Self::Unauthorized => StatusCode::UNAUTHORIZED,
+            Self::Unauthorized | Self::InvalidTicket => StatusCode::UNAUTHORIZED,
             Self::BadRequest(_) | Self::InvalidControls(_) => StatusCode::BAD_REQUEST,
             Self::FileNotFound | Self::JobNotFound | Self::PrinterNotFound | Self::NotFound => {
                 StatusCode::NOT_FOUND
@@ -105,6 +108,7 @@ impl AppError {
     fn code(&self) -> &'static str {
         match self {
             Self::Unauthorized => "unauthorized",
+            Self::InvalidTicket => "invalid_ticket",
             Self::BadRequest(_) => "bad_request",
             Self::FileNotFound | Self::JobNotFound | Self::PrinterNotFound | Self::NotFound => {
                 "not_found"

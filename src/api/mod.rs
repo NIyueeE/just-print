@@ -29,12 +29,10 @@ async fn api_fallback() -> AppError {
     AppError::NotFound
 }
 
-/// 构建完整路由：`/api` 前缀业务接口 + 健康检查 + 静态前端 fallback。
-pub fn router(state: &Arc<AppState>) -> Router {
-    let web_dir = state.config.web_dir.clone();
-    let index = web_dir.join("index.html");
+/// `/api` 业务路由：鉴权、超时、指标与错误信封都在这里装配。
+fn api_router(state: &Arc<AppState>) -> Router {
     let body_limit = state.config.max_upload_bytes;
-    let api = Router::new()
+    Router::new()
         .route("/files", post(files::upload))
         .route("/files/{id}", get(files::preview).delete(files::delete))
         .route("/formats", get(formats::list))
@@ -62,6 +60,17 @@ pub fn router(state: &Arc<AppState>) -> Router {
             header::CACHE_CONTROL,
             HeaderValue::from_static("no-store"),
         ))
+        .with_state(Arc::clone(state))
+}
+
+/// 构建完整路由：`/api` 业务接口、`/mcp` 控制面、票据上传、健康检查与静态前端。
+pub fn router(state: &Arc<AppState>) -> Router {
+    let web_dir = state.config.web_dir.clone();
+    let index = web_dir.join("index.html");
+    let api = api_router(state);
+    let mcp = crate::mcp::router(state, api.clone());
+    let uploads = Router::new()
+        .route("/uploads/{ticket}", post(files::upload_by_ticket))
         .with_state(Arc::clone(state));
 
     let ready_state = Arc::clone(state);
@@ -73,7 +82,9 @@ pub fn router(state: &Arc<AppState>) -> Router {
     Router::new()
         .route("/healthz", get(health::healthz))
         .route("/readyz", get(readyz))
+        .merge(uploads)
         .nest("/api", api)
+        .merge(mcp)
         .fallback_service(ServeDir::new(web_dir).not_found_service(ServeFile::new(index)))
         .layer(SetResponseHeaderLayer::overriding(
             header::X_CONTENT_TYPE_OPTIONS,
@@ -162,6 +173,112 @@ mod tests {
         (status, String::from_utf8_lossy(&bytes).into_owned())
     }
 
+    /// 票据上传通道：一次性、PDF-only、不需要 Bearer。
+    #[tokio::test]
+    async fn ticket_upload_accepts_pdf_exactly_once() {
+        let Some(state) = test_state(temp_web_dir()) else {
+            return;
+        };
+        let app = super::router(&state);
+        let Some(ticket) = state.tickets.issue("probe.pdf".to_string()) else {
+            return;
+        };
+        let pdf = b"%PDF-1.4\n1 0 obj<<>>endobj\ntrailer<<>>\n%%EOF\n".to_vec();
+        let Ok(request) = Request::builder()
+            .uri(format!("/uploads/{ticket}"))
+            .method("POST")
+            .body(Body::from(pdf))
+        else {
+            return;
+        };
+        let (status, body) = response_body(app.clone(), request).await;
+        assert_eq!(status, StatusCode::CREATED, "{body}");
+        assert!(body.contains("\"name\":\"probe.pdf\""));
+
+        // 票据只能兑换一次。
+        let Ok(request) = Request::builder()
+            .uri(format!("/uploads/{ticket}"))
+            .method("POST")
+            .body(Body::from("%PDF-1.4".as_bytes().to_vec()))
+        else {
+            return;
+        };
+        let (status, body) = response_body(app, request).await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED);
+        assert!(body.contains("invalid_ticket"));
+    }
+
+    #[tokio::test]
+    async fn ticket_upload_rejects_non_pdf() {
+        let Some(state) = test_state(temp_web_dir()) else {
+            return;
+        };
+        let app = super::router(&state);
+        let Some(ticket) = state.tickets.issue("note.txt".to_string()) else {
+            return;
+        };
+        let Ok(request) = Request::builder()
+            .uri(format!("/uploads/{ticket}"))
+            .method("POST")
+            .body(Body::from("hello".as_bytes().to_vec()))
+        else {
+            return;
+        };
+        let (status, body) = response_body(app, request).await;
+        assert_eq!(status, StatusCode::UNSUPPORTED_MEDIA_TYPE);
+        assert!(body.contains("PDF"), "{body}");
+    }
+
+    /// MCP 端点：无令牌 401，带令牌可列出七个工具。
+    #[tokio::test]
+    async fn mcp_endpoint_requires_token_and_lists_tools() {
+        let Some(state) = test_state(temp_web_dir()) else {
+            return;
+        };
+        let app = super::router(&state);
+        let payload = concat!(
+            "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/list\",\"params\":{",
+            "\"_meta\":{\"io.modelcontextprotocol/protocolVersion\":\"2026-07-28\",",
+            "\"io.modelcontextprotocol/clientCapabilities\":{}}}}"
+        );
+        let request = Request::builder()
+            .uri("/mcp")
+            .method("POST")
+            .header(header::HOST, "localhost")
+            .header("mcp-protocol-version", "2026-07-28")
+            .header("x-just-print-device", "office")
+            .header(header::CONTENT_TYPE, "application/json")
+            .header(header::ACCEPT, "application/json, text/event-stream")
+            .header("mcp-method", "tools/list")
+            .body(Body::from(payload.to_string()));
+        let Ok(request) = request else { return };
+        let (status, _) = response_body(app.clone(), request).await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED);
+
+        let request = Request::builder()
+            .uri("/mcp")
+            .method("POST")
+            .header(header::HOST, "localhost")
+            .header("mcp-protocol-version", "2026-07-28")
+            .header("x-just-print-device", "office")
+            .header(header::AUTHORIZATION, "Bearer test-token")
+            .header(header::CONTENT_TYPE, "application/json")
+            .header(header::ACCEPT, "application/json, text/event-stream")
+            .header("mcp-method", "tools/list")
+            .body(Body::from(payload.to_string()));
+        let Ok(request) = request else { return };
+        let (status, body) = response_body(app, request).await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        for tool in [
+            "create_upload_ticket",
+            "print_document",
+            "get_device",
+            "cancel_job",
+        ] {
+            assert!(body.contains(tool), "缺少工具 {tool}: {body}");
+        }
+    }
+
     #[tokio::test]
     async fn unknown_api_path_returns_json_404() {
         let Some(state) = test_state(temp_web_dir()) else {
@@ -196,6 +313,9 @@ mod tests {
         let request = Request::builder()
             .uri("/api/files")
             .method("POST")
+            .header(header::HOST, "localhost")
+            .header("mcp-protocol-version", "2026-07-28")
+            .header("x-just-print-device", "office")
             .header(header::AUTHORIZATION, "Bearer test-token")
             .header(header::CONTENT_TYPE, "multipart/form-data; boundary=probe")
             .body(Body::from(payload));
@@ -233,6 +353,9 @@ mod tests {
         let request = Request::builder()
             .uri("/api/print")
             .method("POST")
+            .header(header::HOST, "localhost")
+            .header("mcp-protocol-version", "2026-07-28")
+            .header("x-just-print-device", "office")
             .header(header::AUTHORIZATION, "Bearer test-token")
             .header(header::CONTENT_TYPE, "application/json")
             .body(Body::from("{not json"));
@@ -254,6 +377,9 @@ mod tests {
         let request = Request::builder()
             .uri("/api/print")
             .method("POST")
+            .header(header::HOST, "localhost")
+            .header("mcp-protocol-version", "2026-07-28")
+            .header("x-just-print-device", "office")
             .header(header::AUTHORIZATION, "Bearer test-token")
             .header(header::CONTENT_TYPE, "application/json")
             .body(Body::from("{\"file_id\":123}"));
@@ -274,6 +400,9 @@ mod tests {
         let request = Request::builder()
             .uri("/api/files")
             .method("POST")
+            .header(header::HOST, "localhost")
+            .header("mcp-protocol-version", "2026-07-28")
+            .header("x-just-print-device", "office")
             .header(header::AUTHORIZATION, "Bearer test-token")
             .header(header::CONTENT_TYPE, "application/json")
             .body(Body::from("{}"));
@@ -295,6 +424,9 @@ mod tests {
         let request = Request::builder()
             .uri("/api/print")
             .method("POST")
+            .header(header::HOST, "localhost")
+            .header("mcp-protocol-version", "2026-07-28")
+            .header("x-just-print-device", "office")
             .header(header::AUTHORIZATION, "Bearer test-token")
             .header(header::CONTENT_TYPE, "application/json")
             .header("idempotency-key", "bad\nkey")
@@ -343,6 +475,9 @@ mod tests {
         let request = Request::builder()
             .uri("/api/files")
             .method("POST")
+            .header(header::HOST, "localhost")
+            .header("mcp-protocol-version", "2026-07-28")
+            .header("x-just-print-device", "office")
             .header(header::AUTHORIZATION, "Bearer test-token")
             .header(header::CONTENT_TYPE, "multipart/form-data; boundary=probe")
             .body(Body::from(payload));

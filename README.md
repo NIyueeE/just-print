@@ -15,6 +15,8 @@ LibreOffice 与字体，上传的文档统一转换为 PDF 后交给 CUPS 打印
 - 后端通过标准 IPP over HTTP 直接与 CUPS 通信，无逐请求子进程开销；打印机与任务状态带短 TTL 缓存。
 - 打印提交支持标准 `Idempotency-Key`：重试不会重复出纸，并可在响应丢失后按 `job-name` 对账找回任务。
 - 任务列表、状态查询与取消接口；上传、预览与失败重打的完整闭环。
+- 内置 MCP 端点：Claude Code / Cursor 在终端里直接查设备、上传 PDF、提交打印；
+  一台设备一个连接，文件字节走一次性票据，令牌不进模型上下文（见 [docs/mcp.md](docs/mcp.md)）。
 - Markdown 按渲染样式打印：标题、代码块、表格与引用以文档排版输出，而非源码文本。
 - 容器内置中文（Noto CJK）与 Symbola 表情符号字体，emoji 不会变成豆腐块。
 - 前端按常用偏好预填打印选项：A4、最高分辨率、双面长边装订；提交前有确认对话框。
@@ -47,6 +49,7 @@ Podman 只需将 `docker` 换成 `podman`。更多部署方式见
 ## 文档
 
 - [Web API v1](docs/api.md)
+- [MCP 接入](docs/mcp.md)
 - [部署指南](docs/deployment.md)
 - [架构与实现](docs/architecture.md)
 - [本地开发与检查](docs/development.md)（门禁分层、git 钩子、CI 对齐）

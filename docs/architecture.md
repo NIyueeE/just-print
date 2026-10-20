@@ -36,12 +36,17 @@ just-print/
 │   ├── cups/             # CUPS 集成（标准 IPP over HTTP）
 │   │   ├── mod.rs        # CupsClient：枚举/选项/提交/查询/取消 + 缓存
 │   │   └── options.rs    # 从 IPP 属性提取选项并编码为 job 属性
+│   ├── mcp/              # MCP 端点：一台设备一个连接
+│   │   ├── mod.rs        # /mcp 路由、设备请求头、传输配置
+│   │   ├── backend.rs    # 工具内部调用 /api 路由 + 错误翻译
+│   │   └── tools.rs      # 七个原子工具
 │   ├── config.rs         # 环境变量配置与 fail-closed 校验
 │   ├── conversion.rs     # LibreOffice 文档转 PDF
 │   ├── idempotency.rs    # Idempotency-Key 存储
 │   ├── jobs.rs           # 应用层任务登记表
 │   ├── metrics.rs        # Prometheus 指标注册表
 │   ├── store.rs          # 临时文件引用计数 + TTL
+│   ├── tickets.rs        # 一次性上传票据（终端 curl 通道）
 │   ├── ids.rs            # CSPRNG id 生成
 │   ├── error.rs          # 统一错误信封与状态码映射
 │   └── state.rs          # AppState 与临时目录

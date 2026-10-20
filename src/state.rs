@@ -11,6 +11,7 @@ use crate::idempotency::IdempotencyStore;
 use crate::jobs::JobRegistry;
 use crate::metrics::Metrics;
 use crate::store::FileStore;
+use crate::tickets::{TICKET_CAPACITY, TICKET_TTL, TicketStore};
 
 /// 幂等键存储容量上限。
 pub const IDEMPOTENCY_CAPACITY: usize = 1024;
@@ -60,6 +61,8 @@ pub struct AppState {
     pub jobs: JobRegistry,
     /// 幂等键存储。
     pub idempotency: IdempotencyStore,
+    /// 一次性上传票据（MCP 的终端上传通道）。
+    pub tickets: TicketStore,
     /// Prometheus 指标。
     pub metrics: Arc<Metrics>,
     /// 限制 `LibreOffice` 并发转换的信号量。
@@ -89,6 +92,7 @@ impl AppState {
             cups: Arc::new(cups),
             jobs: JobRegistry::new(JOB_REGISTRY_TTL, JOB_REGISTRY_CAPACITY),
             idempotency: IdempotencyStore::new(config.idempotency_ttl, IDEMPOTENCY_CAPACITY),
+            tickets: TicketStore::new(TICKET_TTL, TICKET_CAPACITY),
             metrics: Arc::new(Metrics::new()),
             conversion_slots: Arc::new(Semaphore::new(config.conversion_slots)),
             upload_slots: Arc::new(Semaphore::new(config.upload_slots)),

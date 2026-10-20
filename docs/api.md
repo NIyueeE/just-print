@@ -3,6 +3,9 @@
 相关文档：[部署指南](deployment.md) · [架构与实现](architecture.md) ·
 [本地开发](development.md)
 
+例外有两处：`POST /uploads/{ticket}` 用一次性票据鉴权（见文末），
+`/mcp` 是 MCP 端点，仍然要求同一个 Bearer 令牌，外加设备请求头（见 [MCP 接入](mcp.md)）。
+
 除 `/healthz`、`/readyz` 与静态前端外，所有接口都在 `/api` 前缀下，并且必须携带
 `Authorization: Bearer <token>`（`JUST_PRINT_TOKEN`）。未带令牌或令牌错误返回
 `401`；令牌未配置时服务拒绝启动（fail-closed）。`/api` 下不存在的路径返回统一的
@@ -31,6 +34,7 @@
 | code | HTTP | 含义 |
 | --- | --- | --- |
 | `unauthorized` | 401 | 缺少或错误的 Bearer 令牌 |
+| `invalid_ticket` | 401 | 上传票据无效、已过期或已被使用 |
 | `bad_request` | 400 | 请求体/参数不合法 |
 | `not_found` | 404 | 文件、打印机或任务不存在 |
 | `unsupported_media_type` | 415 | 上传格式不在支持列表 |
@@ -256,3 +260,33 @@ CUPS 清理时为 `null`。`file_id` / `file_name` / `options` 来自应用层�
 ## DELETE /api/jobs/{id}
 
 取消任务。成功 `204`；任务不存在 `404`；CUPS 拒绝取消返回 `409`/`502`。
+
+## POST /uploads/{ticket}
+
+MCP 的终端上传通道。**不需要** Bearer 令牌：票据本身就是能力凭证，由 MCP 工具
+`create_upload_ticket` 签发，一次性、5 分钟过期、只能创建一个文件。
+
+请求体是**原始文件字节**（不是 multipart），必须用 `--data-binary`（`-d` 会去掉
+换行从而损坏 PDF）：
+
+```bash
+curl -sS -X POST --data-binary @report.pdf 'http://host:8080/uploads/<ticket>'
+```
+
+只接受 PDF（校验 `%PDF-` 魔数）。成功 `201`：
+
+```json
+{ "id": "733d6aaf...", "name": "report.pdf", "size": 482913 }
+```
+
+失败：`401 invalid_ticket`（票据无效、过期或已用过）、`413`（超过上限）、
+`415`（不是 PDF，提示先转换）。
+
+## /mcp
+
+MCP（Model Context Protocol）端点。需要与 `/api` 相同的
+`Authorization: Bearer` 令牌，外加必填的 `X-Just-Print-Device` 请求头
+（CUPS 队列名）；缺失或非法返回 `400`。同时支持 `2026-07-28`（无状态、逐请求
+`_meta`）与 `2025-11-25`（`initialize` 握手）两个协议版本。
+
+工具清单、上传流程与错误码见 [MCP 接入](mcp.md)。

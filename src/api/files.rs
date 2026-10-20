@@ -12,8 +12,9 @@ use axum::extract::multipart::{Field, MultipartRejection};
 use axum::extract::{Multipart, Path as AxumPath, State};
 use axum::http::{StatusCode, header};
 use axum::response::{IntoResponse, Response};
+use futures_util::StreamExt;
 use serde::Serialize;
-use tokio::io::AsyncWriteExt;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio_util::io::ReaderStream;
 
 use crate::conversion::{self, ConversionError};
@@ -287,5 +288,85 @@ fn map_conversion_error(error: ConversionError) -> AppError {
             AppError::UnsupportedMediaType(extension)
         }
         other => AppError::ConversionFailed(other.to_string()),
+    }
+}
+
+/// 凭一次性票据上传 PDF。
+///
+/// 这条通道不需要 Bearer 令牌：票据本身就是能力凭证，由 MCP 工具签发，
+/// 交给终端里的 curl 使用。模型看不到令牌，字节也不经过模型上下文。
+pub async fn upload_by_ticket(
+    State(state): State<Arc<AppState>>,
+    AxumPath(ticket): AxumPath<String>,
+    body: Body,
+) -> Result<(StatusCode, Json<UploadResponse>), AppError> {
+    let Some(name) = state.tickets.redeem(&ticket) else {
+        return Err(AppError::InvalidTicket);
+    };
+    let _permit = state
+        .upload_slots
+        .clone()
+        .acquire_owned()
+        .await
+        .map_err(|_| AppError::ServiceUnavailable("上传通道已关闭".to_string()))?;
+
+    let id = ids::new_id();
+    let path = state.temp_dir.join(format!("{id}-upload.pdf"));
+    // 写入中途失败（客户端断开、超限）由守卫删除半成品。
+    let mut artifacts = UploadArtifacts::new(path.clone());
+    let size = write_body(body, &path, state.config.max_upload_bytes).await?;
+    if !starts_with_pdf_magic(&path).await? {
+        return Err(AppError::UnsupportedMediaType(
+            "不是 PDF（缺少 %PDF- 魔数），请先把文档转换成 PDF".to_string(),
+        ));
+    }
+    state.files.insert(id.clone(), name.clone(), path, size);
+    artifacts.commit();
+    state.metrics.inc("uploads", &[("outcome", "ok")]);
+    tracing::info!(file_id = %id, name = %name, size, "票据上传完成");
+    Ok((StatusCode::CREATED, Json(UploadResponse { id, name, size })))
+}
+
+/// 流式写入请求体，超过上限即中止。
+async fn write_body(body: Body, path: &Path, max_bytes: usize) -> Result<u64, AppError> {
+    let max = u64::try_from(max_bytes).unwrap_or(u64::MAX);
+    let mut file = tokio::fs::File::create(path)
+        .await
+        .map_err(|error| AppError::Internal(format!("写入临时文件失败: {error}")))?;
+    let mut stream = body.into_data_stream();
+    let mut size: u64 = 0;
+    while let Some(chunk) = stream.next().await {
+        let chunk =
+            chunk.map_err(|error| AppError::BadRequest(format!("读取请求体失败: {error}")))?;
+        size = size.saturating_add(u64::try_from(chunk.len()).unwrap_or(u64::MAX));
+        if size > max {
+            drop(file);
+            let _ = tokio::fs::remove_file(path).await;
+            return Err(AppError::PayloadTooLarge);
+        }
+        file.write_all(&chunk)
+            .await
+            .map_err(|error| AppError::Internal(format!("写入临时文件失败: {error}")))?;
+    }
+    file.flush()
+        .await
+        .map_err(|error| AppError::Internal(format!("写入临时文件失败: {error}")))?;
+    drop(file);
+    if size == 0 {
+        let _ = tokio::fs::remove_file(path).await;
+        return Err(AppError::BadRequest("上传内容为空".to_string()));
+    }
+    Ok(size)
+}
+
+/// 校验 PDF 魔数。
+async fn starts_with_pdf_magic(path: &Path) -> Result<bool, AppError> {
+    let mut file = tokio::fs::File::open(path)
+        .await
+        .map_err(|error| AppError::Internal(format!("读取上传文件失败: {error}")))?;
+    let mut head = [0_u8; 5];
+    match file.read_exact(&mut head).await {
+        Ok(_) => Ok(head.as_slice() == b"%PDF-"),
+        Err(_) => Ok(false),
     }
 }
