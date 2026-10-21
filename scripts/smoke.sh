@@ -239,4 +239,106 @@ test "$(curl -s -o /dev/null -w '%{http_code}' -X DELETE \
   -H "Authorization: Bearer $TOKEN" \
   "http://127.0.0.1:$PORT/api/files/$md_id")" = 204
 
+# ---------------------------------------------------------------- MCP 端点
+#
+# 终端优先的 MCP：控制面走 /mcp（Bearer + 设备头），数据面走一次性票据 +
+# curl。这里验证两件事都真的能出纸，而不只是返回 200。
+
+step "mcp: auth and device header are enforced"
+test "$(curl -s -o /dev/null -w '%{http_code}' -X POST "http://127.0.0.1:$PORT/mcp" \
+  -H 'Content-Type: application/json' -d '{}')" = 401
+test "$(curl -s -o /dev/null -w '%{http_code}' -X POST "http://127.0.0.1:$PORT/mcp" \
+  -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' -d '{}')" = 400
+
+# 2026-07-28 是无状态协议：每个请求自带元数据，且要带 Mcp-Method；
+# tools/call 还要带 Mcp-Name。两个 helper 分开写，避免拼条件请求头。
+mcp_meta='"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28","io.modelcontextprotocol/clientCapabilities":{}}'
+mcp_rpc() {
+  curl -sS -X POST "http://127.0.0.1:$PORT/mcp" \
+    -H "Authorization: Bearer $TOKEN" \
+    -H 'X-Just-Print-Device: CUPS-PDF' \
+    -H 'Content-Type: application/json' \
+    -H 'Accept: application/json, text/event-stream' \
+    -H 'MCP-Protocol-Version: 2026-07-28' \
+    -H "Mcp-Method: $2" \
+    -d "$1"
+}
+mcp_tool() {
+  curl -sS -X POST "http://127.0.0.1:$PORT/mcp" \
+    -H "Authorization: Bearer $TOKEN" \
+    -H 'X-Just-Print-Device: CUPS-PDF' \
+    -H 'Content-Type: application/json' \
+    -H 'Accept: application/json, text/event-stream' \
+    -H 'MCP-Protocol-Version: 2026-07-28' \
+    -H 'Mcp-Method: tools/call' \
+    -H "Mcp-Name: $2" \
+    -d "$1"
+}
+
+step "mcp: tools/list"
+tools_json="$(mcp_rpc "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/list\",\"params\":{$mcp_meta}}" tools/list)"
+for tool in create_upload_ticket print_document get_device cancel_job list_jobs; do
+  if ! printf '%s' "$tools_json" | grep -q "\"name\":\"$tool\""; then
+    echo "tools/list missing $tool: $tools_json"
+    exit 1
+  fi
+done
+
+# 签发票据并取出上传地址：响应里 text 与 structuredContent 各有一份，
+# 这里匹配的是 structuredContent 里未转义的那份。
+issue_ticket() {
+  mcp_tool "{\"jsonrpc\":\"2.0\",\"id\":$1,\"method\":\"tools/call\",\"params\":{\"name\":\"create_upload_ticket\",\"arguments\":{\"filename\":\"$2\"},$mcp_meta}}" \
+    create_upload_ticket | sed -n 's/.*"upload_url":"\([^"]*\)".*/\1/p'
+}
+
+step "mcp: ticket upload carries a real PDF"
+upload_url="$(issue_ticket 2 smoke.pdf)"
+if [ -z "$upload_url" ]; then
+  echo "create_upload_ticket did not return upload_url"
+  exit 1
+fi
+curl -fsS -X POST --data-binary @/tmp/ci-preview.pdf "$upload_url" -o /tmp/ci-mcp-upload.json
+mcp_file_id="$(sed -n 's/.*"id":"\([0-9a-f]\{32\}\)".*/\1/p' /tmp/ci-mcp-upload.json)"
+if [ -z "$mcp_file_id" ]; then
+  echo "mcp upload response: $(cat /tmp/ci-mcp-upload.json)"
+  exit 1
+fi
+
+step "mcp: ticket is single use"
+test "$(curl -s -o /dev/null -w '%{http_code}' -X POST \
+  --data-binary @/tmp/ci-preview.pdf "$upload_url")" = 401
+
+step "mcp: ticket upload rejects non-PDF"
+note_url="$(issue_ticket 3 note.txt)"
+printf 'not a pdf' > /tmp/ci-mcp-note.txt
+test "$(curl -s -o /dev/null -w '%{http_code}' -X POST \
+  --data-binary @/tmp/ci-mcp-note.txt "$note_url")" = 415
+
+step "mcp: print_document submits a job"
+mcp_print_json="$(mcp_tool "{\"jsonrpc\":\"2.0\",\"id\":4,\"method\":\"tools/call\",\"params\":{\"name\":\"print_document\",\"arguments\":{\"file_id\":\"$mcp_file_id\",\"options\":{}},$mcp_meta}}" print_document)"
+mcp_job="$(printf '%s' "$mcp_print_json" | sed -n 's/.*"job_id":"\([^"]*\)".*/\1/p')"
+if [ -z "$mcp_job" ]; then
+  echo "mcp print response: $mcp_print_json"
+  exit 1
+fi
+
+step "mcp: job reaches completed"
+mcp_job_json=""
+for _ in $(seq 1 30); do
+  mcp_job_json="$(curl -s -H "Authorization: Bearer $TOKEN" \
+    "http://127.0.0.1:$PORT/api/jobs/$mcp_job")"
+  if printf '%s' "$mcp_job_json" | grep -q '"status":"completed"'; then
+    break
+  fi
+  sleep 1
+done
+if ! printf '%s' "$mcp_job_json" | grep -q '"status":"completed"'; then
+  echo "mcp job response: $mcp_job_json"
+  exit 1
+fi
+
+step "mcp: list_jobs is scoped to the device"
+mcp_jobs_json="$(mcp_tool "{\"jsonrpc\":\"2.0\",\"id\":5,\"method\":\"tools/call\",\"params\":{\"name\":\"list_jobs\",\"arguments\":{\"limit\":5},$mcp_meta}}" list_jobs)"
+printf '%s' "$mcp_jobs_json" | grep -q "$mcp_job"
+
 echo "smoke: all checks passed"
