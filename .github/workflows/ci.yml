@@ -48,7 +48,7 @@ jobs:
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
       - uses: extractions/setup-just@53165ef7e734c5c07cb06b3c8e7b647c5aa16db3 # v4
         with:
-          just-version: "1.40.0"
+          just-version: "1.59.0"
       - name: Install light-gate tools (typos, actionlint, hadolint, zizmor)
         env:
           GH_TOKEN: ${{ github.token }}
@@ -94,7 +94,7 @@ jobs:
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
       - uses: extractions/setup-just@53165ef7e734c5c07cb06b3c8e7b647c5aa16db3 # v4
         with:
-          just-version: "1.40.0"
+          just-version: "1.59.0"
       - name: Run heavy gate (strict, no smoke)
         env:
           PROBE: strict
