@@ -12,7 +12,7 @@ COPY frontend/ ./
 RUN bun run build
 
 # ---------- 后端构建 ----------
-FROM docker.io/library/rust:1.99-bookworm AS backend-builder
+FROM docker.io/library/rust:bookworm AS backend-builder
 WORKDIR /app
 COPY Cargo.toml Cargo.lock ./
 COPY src/ ./src/
