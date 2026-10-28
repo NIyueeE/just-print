@@ -148,4 +148,4 @@ claude mcp add --transport http just-print-office \
 - 只接受 PDF ≤ `JUST_PRINT_MAX_UPLOAD_BYTES`（默认 64 MiB）。
 - `list_jobs` 在服务端分页之后按设备过滤，任务极多时可能少返回几条；
   需要精确结果时用 `get_job`。
-- 同时缓存的设备端点上限 32；超出返回 404（正常部署远达不到）。
+- 同时缓存的设备端点上限 32；超出返回 `400`（正常部署远达不到）。

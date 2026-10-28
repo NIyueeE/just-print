@@ -1,6 +1,6 @@
 //! 文档转 `PDF`：`PDF` 原样校验，`Markdown` 先渲染为带打印样式的
 //! `HTML`，其余格式由镜像内置 `LibreOffice` 转换。
-//! 白名单与镜像内 `LibreOffice` 7.4.7 注册的 `IMPORT` 过滤器一致。
+//! 白名单与镜像内 `LibreOffice` 注册的 `IMPORT` 过滤器一致。
 
 use std::ffi::OsStr;
 use std::fmt::Write as _;

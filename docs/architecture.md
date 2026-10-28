@@ -112,8 +112,8 @@ just-print/
   `fonts-symbola`、`poppler-utils`。
 - `.pdf` 只校验 `%PDF-` 魔数后原样通过。
 - `.md` 先用 `pulldown-cmark` 渲染为带打印样式的 HTML（原始 HTML 一律转义），
-  再交给 LibreOffice；为规避 LibreOffice 7.4 吞首段的导入缺陷，渲染器前置一个
-  不可见占位段落。
+  再交给 LibreOffice；为规避 LibreOffice 的 HTML 导入吞掉正文首段的缺陷，
+  渲染器在第一个段落/标题之前前置一个不可见占位段落。
 - 其它格式通过 `soffice --headless --convert-to pdf` 转换，信号量限制并发
   （`JUST_PRINT_CONVERSION_SLOTS`，默认 2），单次超时
   `JUST_PRINT_CONVERSION_TIMEOUT_SECS`（默认 120 秒）。

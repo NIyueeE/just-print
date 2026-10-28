@@ -62,7 +62,7 @@
 `JUST_PRINT_MAX_UPLOAD_BYTES` 调整）。请求体流式落盘，不会整体读入内存；
 并发上传数由 `JUST_PRINT_UPLOAD_SLOTS` 限制。
 
-支持扩展名与镜像内置 LibreOffice 7.4.7 注册的 `IMPORT` 过滤器一致，另加
+支持扩展名与镜像内置 LibreOffice 注册的 `IMPORT` 过滤器一致，另加
 Markdown 与纯文本。完整列表由 `GET /api/formats` 返回，不再在客户端硬编码。
 `.pdf` 校验 `%PDF-` 魔数后原样通过；`.md` 先渲染为带打印样式的 HTML（原始
 HTML 一律转义）再转换；其它格式由镜像内置 LibreOffice 转换为 PDF。

@@ -77,9 +77,11 @@ commit-msg:
 # Rust 的 lockfile/去重（bans）、前端与镜像的漏洞扫描由 CI 对应作业负责。
 
 # 依赖安全审计（需要 cargo-audit 与 bun；仅 advisory + license）
+# 注：cargo-audit 新版（0.22+）已把 advisory/license 合并为默认子命令，
+# 旧写法 `audit advisories licenses` 会直接报 "unrecognized subcommand"。
 audit:
     {{ _require_vars }}
-    cargo audit --deny warnings advisories licenses
+    cargo audit --deny warnings
     cd frontend && bun audit --audit-level=high
 
 # 构建容器镜像（自动选择 podman 或 docker）
