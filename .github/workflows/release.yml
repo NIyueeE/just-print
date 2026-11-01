@@ -61,18 +61,32 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
       # GitHub Release 与镜像同源缺失过（v0.3.10 只有 tag + 镜像、没有 Release
-      # 页面），因此推 tag 即用 docs/releases/<tag>.md 自动建 Release；已存在则
-      # 跳过（幂等），说明文件缺失时退回自动生成的 notes。
-      - name: Create GitHub Release
+      # 页面），因此推 tag 即用 docs/releases/<tag>.md 自动建 Release；已发布的
+      # 不重复创建。草稿不能被当成“已发布”跳过：v0.3.13 的草稿就是这样一直
+      # 不公开。草稿存在时先刷新仓库里的 notes，再显式发布。
+      - name: Create or publish GitHub Release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ github.ref_name }}
         run: |
           notes="docs/releases/${TAG}.md"
-          if gh release view "$TAG" >/dev/null 2>&1; then
-            echo "Release for $TAG already exists; nothing to do"
-          elif [ -f "$notes" ]; then
-            gh release create "$TAG" --title "$TAG" --notes-file "$notes"
-          else
-            gh release create "$TAG" --title "$TAG" --generate-notes
-          fi
+          state="$(gh release view "$TAG" --json isDraft --jq '.isDraft' 2>/dev/null || true)"
+          case "$state" in
+            true)
+              echo "Release for $TAG exists as a draft; refreshing notes and publishing"
+              if [ -f "$notes" ]; then
+                gh release edit "$TAG" --title "$TAG" --notes-file "$notes"
+              fi
+              gh release edit "$TAG" --draft=false
+              ;;
+            false)
+              echo "Release for $TAG is already published; nothing to do"
+              ;;
+            *)
+              if [ -f "$notes" ]; then
+                gh release create "$TAG" --title "$TAG" --notes-file "$notes"
+              else
+                gh release create "$TAG" --title "$TAG" --generate-notes
+              fi
+              ;;
+          esac
