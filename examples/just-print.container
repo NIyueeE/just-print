@@ -36,6 +36,9 @@ EnvironmentFile=/etc/just-print/just-print.env
 # 指定厂商/通用 PPD 与硬件选项（例如联想 LJ4000D：PCL6 + 双面单元）：
 # Environment=JUST_PRINT_USB_PPD=lsb/usr/cupsfilters/pxlmono.ppd
 # Environment=JUST_PRINT_USB_OPTIONS=OptionDuplex=True
+# 反代/HTTPS 下使用 MCP 时必配（影响上传地址生成）：
+# Environment=JUST_PRINT_PUBLIC_BASE_URL=https://print.example.com
+# Environment=JUST_PRINT_MAX_TEMP_BYTES=1073741824
 
 Tmpfs=/tmp
 # LibreOffice 对 /dev/shm 有依赖，默认 64MiB 在转换大文档时可能不足。
@@ -60,6 +63,8 @@ PodmanArgs=--memory=2g
 [Service]
 Restart=on-failure
 TimeoutStartSec=300
+# 后端最多等待 30 秒让在途打印提交完成对账，留出容器停止余量。
+TimeoutStopSec=45
 
 [Install]
 WantedBy=multi-user.target

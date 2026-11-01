@@ -326,15 +326,31 @@ function createAbortError(): DOMException {
 /* 令牌存取                                                                    */
 /* -------------------------------------------------------------------------- */
 
+/**
+ * 当前 tab 的会话代次。登录/登出都会递增；异步回调在写回状态前必须确认
+ * 代次未变化，避免旧令牌的响应污染新会话。仅驻留内存，不参与持久化。
+ */
+let sessionEpoch = 0
+
+export function currentSessionEpoch(): number {
+  return sessionEpoch
+}
+
+export function isSessionEpochCurrent(epoch: number): boolean {
+  return epoch === sessionEpoch
+}
+
 export function getStoredToken(): string {
   return sessionStorage.getItem(TOKEN_STORAGE_KEY) ?? ''
 }
 
 export function storeToken(token: string): void {
+  sessionEpoch += 1
   sessionStorage.setItem(TOKEN_STORAGE_KEY, token)
 }
 
 export function clearStoredToken(): void {
+  sessionEpoch += 1
   sessionStorage.removeItem(TOKEN_STORAGE_KEY)
 }
 

@@ -11,10 +11,11 @@
 `401`；令牌未配置时服务拒绝启动（fail-closed）。`/api` 下不存在的路径返回统一的
 `404 not_found` JSON 信封（不会落入前端静态页面）。
 
-所有 `/api` 响应带 `Cache-Control: no-store`；所有响应带
-`X-Content-Type-Options: nosniff`、`Referrer-Policy: no-referrer`、
+所有 `/api`、`/mcp` 与 `/uploads/{ticket}` 响应带 `Cache-Control: no-store`；
+所有响应带 `X-Content-Type-Options: nosniff`、`Referrer-Policy: no-referrer`、
 `X-Frame-Options: DENY`、`Content-Security-Policy` 与 `Permissions-Policy`。
-每个响应带 `x-request-id`（客户端可传入同名请求头透传）。
+每个响应带 `x-request-id`（客户端可传入同名请求头透传）。`/api`、`/mcp` 与票据
+上传共享同一请求超时、请求指标和追踪上下文。
 
 ## 通用错误格式
 
@@ -78,7 +79,8 @@ HTML 一律转义）再转换；其它格式由镜像内置 LibreOffice 转换�
 ```
 
 失败：`400`（缺少文件字段或文件为空）、`413`（超过大小限制）、
-`415`（格式不支持）、`422`（转换失败）、`503`（上传/转换通道繁忙）。
+`415`（格式不支持）、`422`（转换失败）、`503`（上传/转换通道繁忙，或已转换
+临时文件总量达到 `JUST_PRINT_MAX_TEMP_BYTES`）。
 
 ## GET /api/files/{id}
 
@@ -223,7 +225,9 @@ UUID）：
 
 ## GET /api/jobs
 
-查询参数：`limit`（1–200，默认 50）、`active`（`true` 时只返回排队/打印中）。
+查询参数：`limit`（1–200，默认 50）、`active`（`true` 时只返回排队/打印中）、
+`printer_id`（只看指定 CUPS 打印机，可选）。过滤在应用 `limit` 之前完成，因此
+不会因为其他打印机的历史任务而漏掉目标设备仍需展示的任务。
 
 成功（`200`）：
 
@@ -247,7 +251,8 @@ UUID）：
 
 `status` 为 `queued` / `printing` / `completed` / `failed` / `canceled`；任务已被
 CUPS 清理时为 `null`。`file_id` / `file_name` / `options` 来自应用层登记表，
-服务重启后可能缺失（CUPS 中的任务仍在）。
+服务重启后可能缺失（CUPS 中的任务仍在）。取消任务后登记元数据会保留到 TTL
+（默认 24 小时），因此刷新页面仍能看到取消状态和可重打的文件关联。
 
 ## GET /api/jobs/{id}
 

@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useId, useRef } from 'preact/hooks'
 import {
+  currentSessionEpoch,
   errorMessage,
   isAbortError,
+  isSessionEpochCurrent,
   listPrinters,
   retryAfterHint,
   type OptionSpec,
@@ -121,20 +123,23 @@ export function PrinterPanel() {
   }, [])
 
   const load = useCallback(
-    async (signal: AbortSignal, bypassCache: boolean): Promise<void> => {
+    async (signal: AbortSignal, bypassCache: boolean, epoch: number): Promise<void> => {
       const items = await listPrinters({ refresh: bypassCache, signal })
-      dispatch({ type: 'printers/loaded', printers: items })
+      if (isSessionEpochCurrent(epoch) && !signal.aborted) {
+        dispatch({ type: 'printers/loaded', printers: items })
+      }
     },
     [dispatch],
   )
 
   usePolling(
     async (signal) => {
+      const epoch = currentSessionEpoch()
       dispatch({ type: 'printers/loading' })
       try {
-        await load(signal, false)
+        await load(signal, false, epoch)
       } catch (error) {
-        if (isAbortError(error)) {
+        if (isAbortError(error) || !isSessionEpochCurrent(epoch)) {
           return
         }
         if (authGuard(error)) {
@@ -156,12 +161,13 @@ export function PrinterPanel() {
     }
     abortRef.current?.abort()
     const controller = new AbortController()
+    const epoch = currentSessionEpoch()
     abortRef.current = controller
     dispatch({ type: 'printers/refreshing', value: true })
     try {
-      await load(controller.signal, true)
+      await load(controller.signal, true, epoch)
     } catch (error) {
-      if (isAbortError(error) || controller.signal.aborted) {
+      if (isAbortError(error) || controller.signal.aborted || !isSessionEpochCurrent(epoch)) {
         return
       }
       if (authGuard(error)) {
@@ -175,7 +181,9 @@ export function PrinterPanel() {
       // 只有当前请求才允许清掉 spinner：被后发请求取代的旧请求结束时不能提前收起。
       if (abortRef.current === controller) {
         abortRef.current = null
-        dispatch({ type: 'printers/refreshing', value: false })
+        if (isSessionEpochCurrent(epoch)) {
+          dispatch({ type: 'printers/refreshing', value: false })
+        }
       }
     }
   }

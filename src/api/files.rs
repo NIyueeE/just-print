@@ -167,9 +167,7 @@ pub async fn upload(
         .await
         .map_err(|error| AppError::Internal(format!("读取转换结果失败: {error}")))?
         .len();
-    state
-        .files
-        .insert(id.clone(), name.clone(), pdf_path, pdf_size);
+    register_pdf(&state, &id, &name, &pdf_path, pdf_size).await?;
     // 转换产物已由 `FileStore` 接管（引用计数 + TTL），源码文件也已删除。
     artifacts.commit();
     state.metrics.inc("uploads", &[("outcome", "ok")]);
@@ -181,6 +179,27 @@ pub async fn upload(
             name,
             size: original_size,
         }),
+    ))
+}
+
+/// 在容量预算内登记转换产物；超限时删除尚未接管的 PDF 并返回可重试错误。
+async fn register_pdf(
+    state: &AppState,
+    id: &str,
+    name: &str,
+    path: &Path,
+    size: u64,
+) -> Result<(), AppError> {
+    if state
+        .files
+        .try_insert(id.to_string(), name.to_string(), path.to_path_buf(), size)
+    {
+        return Ok(());
+    }
+    let _ = tokio::fs::remove_file(path).await;
+    state.metrics.inc("uploads", &[("outcome", "storage_full")]);
+    Err(AppError::ServiceUnavailable(
+        "临时文件存储已达上限，请稍后重试或清理过期文件".to_string(),
     ))
 }
 
@@ -196,7 +215,6 @@ pub async fn preview(
     let file = tokio::fs::File::open(guard.path())
         .await
         .map_err(|error| AppError::Internal(format!("读取预览文件失败: {error}")))?;
-    drop(guard);
     let content_length = metadata.len().to_string();
     let headers = [
         (header::CONTENT_TYPE, "application/pdf"),
@@ -206,7 +224,14 @@ pub async fn preview(
         ),
         (header::CONTENT_LENGTH, content_length.as_str()),
     ];
-    Ok((headers, Body::from_stream(ReaderStream::new(file))).into_response())
+    // 引用必须活到响应体结束（或客户端中断），否则 TTL 清理/删除可能在
+    // 文件仍被发送时把它 unlink。链一个空块，只为了让 guard 被流持有。
+    let guard_tail = futures_util::stream::once(async move {
+        drop(guard);
+        Ok::<axum::body::Bytes, std::io::Error>(axum::body::Bytes::new())
+    });
+    let stream = ReaderStream::new(file).chain(guard_tail);
+    Ok((headers, Body::from_stream(stream)).into_response())
 }
 
 /// 删除一个尚未被打印引用的上传文件。
@@ -300,15 +325,16 @@ pub async fn upload_by_ticket(
     AxumPath(ticket): AxumPath<String>,
     body: Body,
 ) -> Result<(StatusCode, Json<UploadResponse>), AppError> {
-    let Some(name) = state.tickets.redeem(&ticket) else {
-        return Err(AppError::InvalidTicket);
-    };
     let _permit = state
         .upload_slots
         .clone()
         .acquire_owned()
         .await
         .map_err(|_| AppError::ServiceUnavailable("上传通道已关闭".to_string()))?;
+    // 先占上传槽，再原子兑换票据：排队或超时不应白白消耗一次性票据。
+    let Some(name) = state.tickets.redeem(&ticket) else {
+        return Err(AppError::InvalidTicket);
+    };
 
     let id = ids::new_id();
     let path = state.temp_dir.join(format!("{id}-upload.pdf"));
@@ -320,7 +346,12 @@ pub async fn upload_by_ticket(
             "不是 PDF（缺少 %PDF- 魔数），请先把文档转换成 PDF".to_string(),
         ));
     }
-    state.files.insert(id.clone(), name.clone(), path, size);
+    if !state.files.try_insert(id.clone(), name.clone(), path, size) {
+        state.metrics.inc("uploads", &[("outcome", "storage_full")]);
+        return Err(AppError::ServiceUnavailable(
+            "临时文件存储已达上限，请稍后重试或清理过期文件".to_string(),
+        ));
+    }
     artifacts.commit();
     state.metrics.inc("uploads", &[("outcome", "ok")]);
     tracing::info!(file_id = %id, name = %name, size, "票据上传完成");

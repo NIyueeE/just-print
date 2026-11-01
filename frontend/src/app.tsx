@@ -1,5 +1,12 @@
 import { useEffect } from 'preact/hooks'
-import { clearStoredToken, errorMessage, getFormats, isAbortError } from './api'
+import {
+  clearStoredToken,
+  currentSessionEpoch,
+  errorMessage,
+  getFormats,
+  isAbortError,
+  isSessionEpochCurrent,
+} from './api'
 import { ConfirmDialog } from './components/ConfirmDialog'
 import { FlowSteps } from './components/FlowSteps'
 import { JobList } from './components/JobList'
@@ -30,10 +37,15 @@ export function App() {
       return
     }
     const controller = new AbortController()
+    const epoch = currentSessionEpoch()
     getFormats(controller.signal).then(
-      (loaded) => dispatch({ type: 'formats/loaded', formats: loaded }),
+      (loaded) => {
+        if (isSessionEpochCurrent(epoch)) {
+          dispatch({ type: 'formats/loaded', formats: loaded })
+        }
+      },
       (error: unknown) => {
-        if (isAbortError(error) || controller.signal.aborted) {
+        if (isAbortError(error) || controller.signal.aborted || !isSessionEpochCurrent(epoch)) {
           return
         }
         if (authGuard(error)) {

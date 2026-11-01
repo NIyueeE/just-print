@@ -8,6 +8,8 @@ use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::sync::{Mutex, MutexGuard};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+use crate::cups::JobStatus;
+
 /// 任务元数据。
 #[derive(Debug, Clone)]
 pub struct JobRecord {
@@ -23,6 +25,9 @@ pub struct JobRecord {
     pub created_at_ms: u64,
     /// 提交时使用的选项。
     pub options: BTreeMap<String, String>,
+    /// 应用层确认的终态（目前为取消）。CUPS 清理历史后仍可据此展示，
+    /// CUPS 返回的状态始终优先。
+    pub terminal_status: Option<JobStatus>,
 }
 
 /// 进程内任务登记表。
@@ -78,13 +83,22 @@ impl JobRegistry {
     /// 列出任务（新提交的在前，最多 `limit` 条）。
     #[must_use]
     pub fn list(&self, limit: usize) -> Vec<JobRecord> {
+        self.list_filtered(None, limit)
+    }
+
+    /// 按打印机过滤后列出任务；过滤发生在截断之前，避免某一台打印机的
+    /// 历史任务把另一台打印机的近期任务挤出 `limit`。
+    #[must_use]
+    pub fn list_filtered(&self, printer_id: Option<&str>, limit: usize) -> Vec<JobRecord> {
         let inner = self.lock();
         inner
             .order
             .iter()
             .rev()
+            .filter_map(|id| inner.map.get(id))
+            .filter(|record| printer_id.is_none_or(|printer| record.printer_id == printer))
             .take(limit)
-            .filter_map(|id| inner.map.get(id).cloned())
+            .cloned()
             .collect()
     }
 
@@ -94,7 +108,8 @@ impl JobRegistry {
         self.lock().map.len()
     }
 
-    /// 移除任务元数据。
+    /// 移除任务元数据（测试辅助；生产路径由 TTL/容量回收）。
+    #[cfg(test)]
     pub fn remove(&self, id: &str) {
         let mut inner = self.lock();
         if inner.map.remove(id).is_some() {
@@ -152,6 +167,7 @@ mod tests {
             printer_id: "PDF".to_string(),
             created_at_ms: now_ms(),
             options: BTreeMap::new(),
+            terminal_status: None,
         }
     }
 

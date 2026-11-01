@@ -2,12 +2,17 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   ApiError,
   UPLOAD_TIMEOUT_MS,
+  clearStoredToken,
+  currentSessionEpoch,
+  getStoredToken,
   isIdempotencyConflict,
   isRetryable,
+  isSessionEpochCurrent,
   listPrinters,
   parseErrorPayload,
   parseRetryAfter,
   retryAfterHint,
+  storeToken,
   submitPrint,
   getFormats,
   uploadFile,
@@ -32,6 +37,20 @@ beforeEach(() => {
 afterEach(() => {
   vi.unstubAllGlobals()
   vi.restoreAllMocks()
+})
+
+describe('会话代次', () => {
+  it('invalidates callbacks captured before login or logout', () => {
+    const before = currentSessionEpoch()
+    storeToken('new-token')
+    expect(getStoredToken()).toBe('new-token')
+    expect(isSessionEpochCurrent(before)).toBe(false)
+
+    const current = currentSessionEpoch()
+    clearStoredToken()
+    expect(getStoredToken()).toBe('')
+    expect(isSessionEpochCurrent(current)).toBe(false)
+  })
 })
 
 describe('错误信封解析', () => {

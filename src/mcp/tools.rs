@@ -240,17 +240,29 @@ impl McpServer {
                 None,
             ));
         };
+        let base = base_url(&ctx, self.state.config.public_base_url.as_deref()).map_err(|error| {
+            ErrorData::invalid_params(
+                format!(
+                    "无法确定对外上传地址：{error}。请在服务端配置 JUST_PRINT_PUBLIC_BASE_URL。",
+                ),
+                None,
+            )
+        })?;
         let Some(ticket) = self.state.tickets.issue(name) else {
             return Err(ErrorData::internal_error(
                 "同时有效的上传票据已满，请稍后重试".to_string(),
                 None,
             ));
         };
-        let base = base_url(&ctx).unwrap_or_default();
         let url = format!("{base}/uploads/{ticket}");
         Ok(Json(TicketView {
             upload_url: url.clone(),
-            curl: format!("curl -sS -X POST --data-binary @{{path}} '{url}'"),
+            // URL 只含经过校验的 origin 与随机票据；仍做 shell 引用，避免未来
+            // 地址规则放宽时字符串进入命令上下文。文件路径保留为明确的占位符。
+            curl: format!(
+                "curl -sS --fail-with-body -X POST --data-binary @\"{{path}}\" -- {}",
+                shell_quote(&url)
+            ),
             expires_in_secs: TICKET_TTL.as_secs(),
         }))
     }
@@ -304,27 +316,22 @@ impl McpServer {
             .metrics
             .inc("mcp_calls", &[("tool", "list_jobs")]);
         let limit = args.limit.unwrap_or(20).clamp(1, MAX_JOB_LIMIT);
-        let fetch = limit.saturating_mul(4).min(MAX_JOB_LIMIT).max(limit);
-        let mut path = format!("/api/jobs?limit={fetch}");
+        // API 在截断前按设备过滤，因此这里不需要过取；limit 由服务端再次
+        // clamp，MCP 与 Web 的可见任务集合一致。
+        let mut path = format!(
+            "/api/jobs?limit={limit}&printer_id={}",
+            url_escape(self.device.as_ref())
+        );
         if args.active.unwrap_or(false) {
             path.push_str("&active=true");
         }
         let (status, headers, body) = self.backend.call(Method::GET, &path, None, None).await?;
         let list: Value = backend::parse(status, &headers, &body)?;
-        let mut jobs: Vec<Value> = list
+        let jobs: Vec<Value> = list
             .get("jobs")
             .and_then(Value::as_array)
-            .map(|items| {
-                items
-                    .iter()
-                    .filter(|item| {
-                        item.get("printer_id").and_then(Value::as_str) == Some(self.device.as_ref())
-                    })
-                    .cloned()
-                    .collect()
-            })
+            .cloned()
             .unwrap_or_default();
-        jobs.truncate(usize::try_from(limit).unwrap_or(20));
         Ok(Json(JobsView {
             device: self.device.to_string(),
             jobs,
@@ -442,16 +449,57 @@ impl ServerHandler for McpServer {
     }
 }
 
-/// 从请求里推断对外基地址；拿不到请求头时返回空串（调用方降级为相对地址）。
-fn base_url(ctx: &RequestContext<RoleServer>) -> Option<String> {
-    let parts = ctx.extensions.get::<axum::http::request::Parts>()?;
-    let host = parts.headers.get(header::HOST)?.to_str().ok()?;
-    let scheme = parts
+/// 从配置或经严格校验的 Host 头确定对外基地址。
+///
+/// 不信任 `X-Forwarded-*`：这些头可由任意客户端伪造，而 MCP 会把结果交给
+/// 终端执行。TLS 反代部署必须显式配置 `JUST_PRINT_PUBLIC_BASE_URL`。
+fn base_url(
+    ctx: &RequestContext<RoleServer>,
+    configured: Option<&str>,
+) -> Result<String, &'static str> {
+    if let Some(base) = configured {
+        return Ok(base.to_string());
+    }
+    let parts = ctx
+        .extensions
+        .get::<axum::http::request::Parts>()
+        .ok_or("缺少 HTTP 请求上下文")?;
+    let host = parts
         .headers
-        .get("x-forwarded-proto")
+        .get(header::HOST)
         .and_then(|value| value.to_str().ok())
-        .unwrap_or("http");
-    Some(format!("{scheme}://{host}"))
+        .ok_or("请求缺少合法的 Host 头")?;
+    resolve_fallback_base(host)
+}
+
+/// 无显式配置时仅从 Host 推导 HTTP origin，并只接受字符集受限的 host[:port]。
+fn resolve_fallback_base(host: &str) -> Result<String, &'static str> {
+    use axum::http::Uri;
+
+    if host.is_empty()
+        || host.contains('@')
+        || !host
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '.' | '-' | ':' | '[' | ']'))
+    {
+        return Err("Host 头包含不允许的字符");
+    }
+    let candidate = format!("http://{host}");
+    let uri = candidate
+        .parse::<Uri>()
+        .map_err(|_| "Host 头不是合法的 authority")?;
+    if uri.scheme_str() != Some("http")
+        || uri.authority().is_none()
+        || uri.path_and_query().is_some_and(|path| path.path() != "/")
+    {
+        return Err("Host 头不是合法的 authority");
+    }
+    Ok(candidate)
+}
+
+/// POSIX shell 单引号引用；URL 本身已受字符集限制，这里是纵深防御。
+fn shell_quote(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "'\\''"))
 }
 
 /// 只保留文件名部分，拒绝路径与控制字符。
@@ -470,6 +518,20 @@ fn sanitize_name(raw: &str) -> Option<String> {
     Some(name.to_string())
 }
 
+/// 设备名只允许 `[A-Za-z0-9._-]`，正常无需转义；保留编码以防未来放宽规则。
+fn url_escape(value: &str) -> String {
+    value
+        .bytes()
+        .map(|byte| {
+            if byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.') {
+                char::from(byte).to_string()
+            } else {
+                format!("%{byte:02X}")
+            }
+        })
+        .collect()
+}
+
 /// 由内容派生幂等键：相同文件、设备与选项在保留期内映射到同一个键。
 fn idempotency_key(file_id: &str, device: &str, options: &BTreeMap<String, String>) -> String {
     use std::hash::{Hash, Hasher};
@@ -484,7 +546,9 @@ fn idempotency_key(file_id: &str, device: &str, options: &BTreeMap<String, Strin
 mod tests {
     use std::collections::BTreeMap;
 
-    use super::{McpServer, idempotency_key, sanitize_name};
+    use super::{
+        McpServer, idempotency_key, resolve_fallback_base, sanitize_name, shell_quote, url_escape,
+    };
     use crate::state::AppState;
 
     fn server() -> Option<McpServer> {
@@ -497,6 +561,7 @@ mod tests {
             cups_server: "127.0.0.1:631".to_string(),
             cups_scheme: "ipp".to_string(),
             max_upload_bytes: 1024,
+            max_temp_bytes: 1024 * 1024,
             conversion_timeout: std::time::Duration::from_secs(1),
             conversion_slots: 1,
             cleanup_interval: std::time::Duration::from_secs(1),
@@ -508,6 +573,9 @@ mod tests {
             idempotency_wait: std::time::Duration::from_secs(1),
             upload_slots: 1,
             request_timeout: std::time::Duration::from_secs(60),
+            shutdown_timeout: std::time::Duration::from_secs(5),
+            ready_timeout: std::time::Duration::from_secs(3),
+            public_base_url: None,
         };
         let state = AppState::new(config, temp).ok()?;
         let state = std::sync::Arc::new(state);
@@ -573,6 +641,30 @@ mod tests {
         assert_eq!(sanitize_name(".."), None);
         assert_eq!(sanitize_name("   "), None);
         assert_eq!(sanitize_name("a\u{0}b.pdf"), None);
+    }
+
+    #[test]
+    fn fallback_base_only_accepts_safe_authorities() {
+        assert_eq!(
+            resolve_fallback_base("print.example.com:8080"),
+            Ok("http://print.example.com:8080".to_string())
+        );
+        assert!(resolve_fallback_base("example.com'; touch /tmp/pwn; '").is_err());
+        assert!(resolve_fallback_base("user@example.com").is_err());
+        assert!(resolve_fallback_base("example.com/path").is_err());
+        assert!(resolve_fallback_base("").is_err());
+    }
+
+    #[test]
+    fn shell_quote_cannot_be_escaped_by_url_content() {
+        assert_eq!(shell_quote("http://example.com"), "'http://example.com'");
+        assert_eq!(shell_quote("a'b"), "'a'\\''b'");
+    }
+
+    #[test]
+    fn device_names_are_safe_in_query_strings() {
+        assert_eq!(url_escape("office"), "office");
+        assert_eq!(url_escape("a&b=c"), "a%26b%3Dc");
     }
 
     #[test]

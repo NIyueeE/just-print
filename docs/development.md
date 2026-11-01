@@ -98,7 +98,7 @@ just init-hooks
 | `Lint (gate-light)` | `PROBE=strict just gate-light` |
 | `Check (gate-heavy …)` | `PROBE=strict scripts/gate-heavy.sh --no-smoke` |
 | `Smoke (gate-heavy …)` | `PROBE=strict scripts/smoke.sh` |
-| `Dependency audit` | `just audit`（Rust advisory + license、前端 npm） |
+| `Dependency audit` | `just audit`（Rust advisory + 前端 npm advisory） |
 | `Build image` | `just container` + Trivy 镜像漏洞扫描 |
 | `Validate compose example` | `docker compose -f examples/compose.yaml config` |
 | `Gate summary` | 汇总作业：分支保护只勾选它即可覆盖全部门禁 |
@@ -161,10 +161,12 @@ chromium --headless=new --disable-gpu --no-sandbox --hide-scrollbars \
 本机 Chromium 可执行文件），注意：
 
 - 令牌存于 `sessionStorage`，键为 `just_print_token`（见
-  `frontend/src/api.ts` 的 `TOKEN_KEY`）；注入后需 `reload`。登录页会先用
+  `frontend/src/api.ts` 的 `TOKEN_STORAGE_KEY`）；注入后需 `reload`。登录页会先用
   `GET /api/printers` 校验令牌，mock 需要让该请求成功。
-- 上传走 `#file-input` 的 `setInputFiles`，转换完成以
-  `.preview iframe` 出现为标志；`waitForSelector` 时给足超时。
+- 上传输入是 `#uploader-file-input`，可访问名称为「选择要打印的文件」，用
+  `getByLabel` 或该 id 的 `setInputFiles`；转换完成以预览区出现 PDF iframe
+  （`#uploader-preview-frame`）或 `.uploader__preview` 为标志，`waitForSelector`
+  时给足超时。
 - 预览 iframe 很高，任务状态区常在折叠线以下：视口截图会漏掉，需
   `fullPage: true` 或先 `scrollTo` 到底部。
 - 未上传文档时「提交打印」按钮置灰，先完成上传再点；按钮按文案定位时用

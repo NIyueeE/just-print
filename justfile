@@ -73,12 +73,12 @@ commit-msg:
 
 # ---------------------------------------------------------------- 依赖与镜像
 #
-# 依赖审计只做 advisory 与 license 门禁（它曾在漏洞被上游修复前持续报红）。
-# Rust 的 lockfile/去重（bans）、前端与镜像的漏洞扫描由 CI 对应作业负责。
+# 依赖审计只做 Rust 与前端 npm 的 advisory 门禁；license、lockfile/去重与
+# 镜像漏洞扫描分别由 CI 的审计/镜像作业负责（前端 npm 审计已同步进 CI）。
 
-# 依赖安全审计（需要 cargo-audit 与 bun；仅 advisory + license）
-# 注：cargo-audit 新版（0.22+）已把 advisory/license 合并为默认子命令，
-# 旧写法 `audit advisories licenses` 会直接报 "unrecognized subcommand"。
+# 依赖安全审计（需要 cargo-audit 与 bun）
+# 注：cargo-audit 新版（0.22+）使用默认子命令；旧写法
+# `audit advisories licenses` 会直接报 "unrecognized subcommand"。
 audit:
     {{ _require_vars }}
     cargo audit --deny warnings

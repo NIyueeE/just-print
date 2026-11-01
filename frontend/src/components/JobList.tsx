@@ -2,9 +2,11 @@ import { useEffect, useRef } from 'preact/hooks'
 import {
   ApiError,
   cancelJob,
+  currentSessionEpoch,
   errorMessage,
   getJob,
   isAbortError,
+  isSessionEpochCurrent,
   isUnauthorized,
   listJobs,
   retryAfterHint,
@@ -71,6 +73,51 @@ function displayStatus(job: JobView): DisplayStatus {
   return job.status ?? 'unknown'
 }
 
+/** 终态补查的有界并发：避免大量任务串行等待多个 HTTP 超时。 */
+export const TERMINAL_LOOKUP_CONCURRENCY = 4
+
+/**
+ * 批量补查已从 active 列表消失的本地任务。
+ *
+ * 404 表示 CUPS 已清理；其它错误必须抛给轮询层，否则本地任务会永远停在
+ * queued/printing，而 hasActive 又让轮询继续空转。成功结果按批次返回，
+ * 调用方逐批写回状态。
+ */
+export async function refreshPendingJobs(
+  pending: readonly JobView[],
+  signal: AbortSignal,
+  lookup: (jobId: string, signal: AbortSignal) => Promise<JobView> = getJob,
+): Promise<JobView[]> {
+  const refreshed: JobView[] = []
+  for (let offset = 0; offset < pending.length; offset += TERMINAL_LOOKUP_CONCURRENCY) {
+    if (signal.aborted) {
+      break
+    }
+    const batch = pending.slice(offset, offset + TERMINAL_LOOKUP_CONCURRENCY)
+    const results = await Promise.all(
+      batch.map(async (job) => {
+        try {
+          return await lookup(job.id, signal)
+        } catch (error) {
+          if (isAbortError(error)) {
+            throw error
+          }
+          if (isUnauthorized(error)) {
+            throw error
+          }
+          if (error instanceof ApiError && error.status === 404) {
+            // CUPS 已清理该任务：保留文件/选项元数据，只把状态标为未知。
+            return { ...job, status: null }
+          }
+          throw error
+        }
+      }),
+    )
+    refreshed.push(...results)
+  }
+  return refreshed
+}
+
 function JobStatusIcon({ status }: { status: DisplayStatus }) {
   if (status === 'queued') return <ClockIcon size={16} />
   if (status === 'printing') return <SpinnerIcon size={16} />
@@ -95,10 +142,15 @@ export function JobList() {
     }
     hydratedRef.current = true
     const controller = new AbortController()
+    const epoch = currentSessionEpoch()
     listJobs({ limit: MAX_JOB_VIEWS, signal: controller.signal }).then(
-      (loaded) => dispatch({ type: 'jobs/upsert', jobs: loaded }),
+      (loaded) => {
+        if (isSessionEpochCurrent(epoch) && !controller.signal.aborted) {
+          dispatch({ type: 'jobs/upsert', jobs: loaded })
+        }
+      },
       (error: unknown) => {
-        if (isAbortError(error) || controller.signal.aborted) {
+        if (isAbortError(error) || controller.signal.aborted || !isSessionEpochCurrent(epoch)) {
           return
         }
         if (authGuard(error)) {
@@ -123,38 +175,27 @@ export function JobList() {
   // 每次轮询都撞一次 401。
   usePolling(
     async (signal) => {
+      const epoch = currentSessionEpoch()
       dispatch({ type: 'jobs/polling', value: true })
       try {
         const activeJobs = await listJobs({ active: true, limit: MAX_JOB_VIEWS, signal })
+        if (!isSessionEpochCurrent(epoch) || signal.aborted) {
+          return
+        }
         dispatch({ type: 'jobs/upsert', jobs: activeJobs })
 
-        // 本地认为还在进行、但已不在 active 列表里的任务：逐个查询终态。
+        // 本地认为还在进行、但已不在 active 列表里的任务：有界并发查询终态。
+        // 非 404 错误会交给外层，由 usePolling 退避重试，绝不能静默吞掉。
         const activeIds = new Set(activeJobs.map((job) => job.id))
         const pending = viewsRef.current.filter(
           (job) => isActiveJobStatus(job.status) && !activeIds.has(job.id),
         )
-        for (const job of pending) {
-          if (signal.aborted) {
-            return
-          }
-          try {
-            const fresh = await getJob(job.id, signal)
-            dispatch({ type: 'jobs/upsert', jobs: [fresh] })
-          } catch (error) {
-            if (isAbortError(error)) {
-              return
-            }
-            if (isUnauthorized(error)) {
-              throw error
-            }
-            if (error instanceof ApiError && error.status === 404) {
-              // CUPS 已清理该任务：只更新任务视图，绝不清空已上传的文件/预览。
-              dispatch({ type: 'jobs/upsert', jobs: [{ ...job, status: null }] })
-            }
-          }
+        const refreshed = await refreshPendingJobs(pending, signal)
+        if (isSessionEpochCurrent(epoch) && !signal.aborted && refreshed.length > 0) {
+          dispatch({ type: 'jobs/upsert', jobs: refreshed })
         }
       } catch (error) {
-        if (isAbortError(error) || signal.aborted) {
+        if (isAbortError(error) || signal.aborted || !isSessionEpochCurrent(epoch)) {
           return
         }
         if (authGuard(error)) {
@@ -166,7 +207,9 @@ export function JobList() {
         })
         throw error
       } finally {
-        dispatch({ type: 'jobs/polling', value: false })
+        if (isSessionEpochCurrent(epoch)) {
+          dispatch({ type: 'jobs/polling', value: false })
+        }
       }
     },
     {
@@ -182,14 +225,20 @@ export function JobList() {
   }
 
   async function handleCancel(job: JobView): Promise<void> {
+    const epoch = currentSessionEpoch()
     try {
       await cancelJob(job.id)
+      if (!isSessionEpochCurrent(epoch)) {
+        return
+      }
+      // 本地立即反映取消，避免刷新前仍显示“打印中”并继续轮询该任务。
+      dispatch({ type: 'jobs/upsert', jobs: [{ ...job, status: 'canceled' }] })
       dispatch({
         type: 'notice/add',
         notice: createNotice('success', `已请求取消任务 ${job.id}，状态稍后刷新。`),
       })
     } catch (error) {
-      if (authGuard(error)) {
+      if (!isSessionEpochCurrent(epoch) || authGuard(error)) {
         return
       }
       dispatch({

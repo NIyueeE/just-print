@@ -11,7 +11,7 @@ use serde::{Deserialize, Serialize};
 use crate::cups::{CupsError, JobInfo, JobStatus};
 use crate::error::AppError;
 use crate::jobs::JobRecord;
-use crate::state::AppState;
+use crate::state::{AppState, JOB_REGISTRY_CAPACITY};
 
 /// 任务列表查询参数。
 #[derive(Debug, Deserialize)]
@@ -20,6 +20,8 @@ pub struct JobListQuery {
     pub limit: Option<usize>,
     /// 只返回未结束（排队/打印中）的任务。
     pub active: Option<bool>,
+    /// 只看指定 CUPS 打印机（在截断前过滤）。
+    pub printer_id: Option<String>,
 }
 
 /// 任务视图。
@@ -58,7 +60,17 @@ pub async fn list(
     Query(query): Query<JobListQuery>,
 ) -> Result<Json<JobListResponse>, AppError> {
     let limit = query.limit.unwrap_or(50).clamp(1, 200);
-    let records = state.jobs.list(limit);
+    // active 是 CUPS 状态派生值，无法在登记表里判定。先取登记表全量，
+    // 合并 CUPS 状态后再过滤并截断；否则较早但仍在排队的任务会被大量
+    // 新完成的任务挤出列表。普通列表仍在登记表层提前截断。
+    let registry_limit = if query.active == Some(true) {
+        JOB_REGISTRY_CAPACITY
+    } else {
+        limit
+    };
+    let records = state
+        .jobs
+        .list_filtered(query.printer_id.as_deref(), registry_limit);
 
     // 每台打印机只向 CUPS 查一次任务列表，避免按任务数放大为 N 次 IPP 请求。
     let mut by_printer: HashMap<String, HashMap<i32, JobInfo>> = HashMap::new();
@@ -94,6 +106,9 @@ pub async fn list(
         {
             continue;
         }
+        if views.len() >= limit {
+            break;
+        }
         views.push(view_from(Some(record), info.as_ref()));
     }
     Ok(Json(JobListResponse { jobs: views }))
@@ -109,9 +124,17 @@ pub async fn get(
         .cups
         .job_status(&printer, cups_job_id)
         .await
-        .map_err(AppError::from)?
-        .ok_or(AppError::JobNotFound)?;
-    Ok(Json(view_from(record, Some(&info))))
+        .map_err(AppError::from)?;
+    match info {
+        Some(info) => Ok(Json(view_from(record, Some(&info)))),
+        None if record
+            .as_ref()
+            .is_some_and(|record| record.terminal_status.is_some()) =>
+        {
+            Ok(Json(view_from(record, None)))
+        }
+        None => Err(AppError::JobNotFound),
+    }
 }
 
 /// 取消任务。
@@ -128,8 +151,11 @@ pub async fn cancel(
             CupsError::NotFound => AppError::JobNotFound,
             other => AppError::from(other),
         })?;
-    if let Some(record) = record {
-        state.jobs.remove(&record.id);
+    // 保留登记元数据，并记录应用层取消状态：刷新页面后仍能展示取消状态，
+    // 即使 CUPS 稍后清理了任务历史，文件关联也可继续供重打。
+    if let Some(mut record) = record {
+        record.terminal_status = Some(JobStatus::Canceled);
+        state.jobs.insert(record);
     }
     state.metrics.inc("print_jobs", &[("outcome", "canceled")]);
     tracing::info!(job_id = %job_id, "打印任务已取消");
@@ -204,7 +230,9 @@ fn view_from(record: Option<JobRecord>, info: Option<&JobInfo>) -> JobView {
         name: info.and_then(|job| job.name.clone()),
         file_id: record.as_ref().map(|record| record.file_id.clone()),
         file_name: record.as_ref().map(|record| record.file_name.clone()),
-        status: info.map(|job| job.status),
+        status: info
+            .map(|job| job.status)
+            .or_else(|| record.as_ref().and_then(|record| record.terminal_status)),
         error: info.and_then(|job| job.error.clone()),
         created_at_ms: info
             .map_or(0, |job| job.created_at_ms)
@@ -215,7 +243,25 @@ fn view_from(record: Option<JobRecord>, info: Option<&JobInfo>) -> JobView {
 
 #[cfg(test)]
 mod tests {
-    use super::split_job_id;
+    use super::{split_job_id, view_from};
+    use crate::cups::JobStatus;
+    use crate::jobs::JobRecord;
+
+    #[test]
+    fn terminal_status_survives_cups_history_cleanup() {
+        let record = JobRecord {
+            id: "PDF-9".to_string(),
+            file_id: "file".to_string(),
+            file_name: "doc.pdf".to_string(),
+            printer_id: "PDF".to_string(),
+            created_at_ms: 1,
+            options: std::collections::BTreeMap::new(),
+            terminal_status: Some(JobStatus::Canceled),
+        };
+        let view = view_from(Some(record), None);
+        assert_eq!(view.status, Some(JobStatus::Canceled));
+        assert_eq!(view.file_name.as_deref(), Some("doc.pdf"));
+    }
 
     #[test]
     fn splits_hyphenated_printer_names() {

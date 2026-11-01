@@ -69,8 +69,7 @@ impl TicketStore {
         Some(ticket.name)
     }
 
-    /// 当前登记的有效票据数（仅测试使用）。
-    #[cfg(test)]
+    /// 当前登记的票据数（含已过期但尚未被签发时清扫的条目）。
     #[must_use]
     pub fn len(&self) -> usize {
         self.lock().len()

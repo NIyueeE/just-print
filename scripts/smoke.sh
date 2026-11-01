@@ -51,15 +51,15 @@ fi
 cid=""
 cleanup() {
   _status=$?
-  if [ -n "$cid" ]; then
-    "$runtime" rm -f "$cid" >/dev/null 2>&1 || true
-  fi
-  # 非零退出时先 dump 容器日志，便于定位是哪一步断言失败。
-  # dash 等 POSIX sh 对 `trap ... ERR` 支持不完整（会报 "bad trap"），
-  # 所以统一在 EXIT 里按退出状态分流。
-  if [ "$_status" -ne 0 ]; then
+  # 非零退出时先 dump 容器日志，便于定位是哪一步断言失败；必须在 rm 之前，
+  # 且容器以 --rm 启动，删除后就再也取不到日志。dash 等 POSIX sh 对
+  # `trap ... ERR` 支持不完整（会报 "bad trap"），所以统一在 EXIT 里分流。
+  if [ "$_status" -ne 0 ] && [ -n "$cid" ]; then
     echo "=== SMOKE FAILED (exit $_status): container logs (tail 150) ==="
     "$runtime" logs "$cid" 2>&1 | tail -150 || true
+  fi
+  if [ -n "$cid" ]; then
+    "$runtime" rm -f "$cid" >/dev/null 2>&1 || true
   fi
   return 0
 }
@@ -68,6 +68,7 @@ trap cleanup EXIT
 echo "==> starting container"
 cid="$("$runtime" run -d --rm -p "127.0.0.1:$PORT:8080" \
   -e "JUST_PRINT_TOKEN=$TOKEN" \
+  -e "JUST_PRINT_PUBLIC_BASE_URL=http://127.0.0.1:$PORT" \
   -e JUST_PRINT_CUPS_PDF=1 \
   "$IMAGE")"
 
@@ -297,6 +298,13 @@ if [ -z "$upload_url" ]; then
   echo "create_upload_ticket did not return upload_url"
   exit 1
 fi
+case "$upload_url" in
+  "http://127.0.0.1:$PORT/uploads/"*) ;;
+  *)
+    echo "upload_url did not use JUST_PRINT_PUBLIC_BASE_URL: $upload_url"
+    exit 1
+    ;;
+esac
 curl -fsS -X POST --data-binary @/tmp/ci-preview.pdf "$upload_url" -o /tmp/ci-mcp-upload.json
 mcp_file_id="$(sed -n 's/.*"id":"\([0-9a-f]\{32\}\)".*/\1/p' /tmp/ci-mcp-upload.json)"
 if [ -z "$mcp_file_id" ]; then

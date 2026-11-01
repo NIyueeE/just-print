@@ -274,15 +274,43 @@ async fn render_markdown_to_html(
     Ok(html_path)
 }
 
-/// 尽力删除转换失败时的残留产物：`UserInstallation` 配置目录、
-/// 中间文件（`Markdown` 渲染出的 `HTML`）与可能的部分输出 `PDF`。
-async fn cleanup_artifacts(profile_dir: &Path, intermediate: Option<&Path>, output: Option<&Path>) {
-    let _ = tokio::fs::remove_dir_all(profile_dir).await;
-    if let Some(path) = intermediate {
-        let _ = tokio::fs::remove_file(path).await;
+/// 转换中间产物守卫。
+///
+/// 不仅覆盖普通错误返回，也覆盖 future 被取消（客户端断开、请求超时）：
+/// 此时 async 清理函数不会继续执行，只有 `Drop` 能立即收走 `LibreOffice`
+/// profile、Markdown 中间 HTML 与未完成的输出 PDF。
+struct ConversionGuard {
+    profile_dir: PathBuf,
+    intermediate: Option<PathBuf>,
+    output: PathBuf,
+    keep_output: bool,
+}
+
+impl ConversionGuard {
+    fn new(profile_dir: PathBuf, intermediate: Option<PathBuf>, output: PathBuf) -> Self {
+        Self {
+            profile_dir,
+            intermediate,
+            output,
+            keep_output: false,
+        }
     }
-    if let Some(path) = output {
-        let _ = tokio::fs::remove_file(path).await;
+
+    /// 成功产出 PDF 后保留输出；profile 与中间文件仍在析构时删除。
+    fn keep_output(&mut self) {
+        self.keep_output = true;
+    }
+}
+
+impl Drop for ConversionGuard {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.profile_dir);
+        if let Some(path) = self.intermediate.as_ref() {
+            let _ = std::fs::remove_file(path);
+        }
+        if !self.keep_output {
+            let _ = std::fs::remove_file(&self.output);
+        }
     }
 }
 
@@ -348,6 +376,13 @@ pub async fn convert_to_pdf(
 
     let profile_dir = output_dir.join(format!("lo-profile-{}", crate::ids::new_id()));
     let profile_url = format!("file://{}", profile_dir.display());
+    let stem = convert_source
+        .file_stem()
+        .and_then(OsStr::to_str)
+        .unwrap_or("document");
+    let output = output_dir.join(format!("{stem}.pdf"));
+    let mut artifacts =
+        ConversionGuard::new(profile_dir.clone(), intermediate.clone(), output.clone());
     let mut child = Command::new("soffice")
         .arg(format!("-env:UserInstallation={profile_url}"))
         .arg("--headless")
@@ -360,40 +395,24 @@ pub async fn convert_to_pdf(
         .spawn()
         .map_err(ConversionError::Spawn)?;
 
-    let stem = convert_source
-        .file_stem()
-        .and_then(OsStr::to_str)
-        .unwrap_or("document");
-    let output = output_dir.join(format!("{stem}.pdf"));
-
     let status = match tokio::time::timeout(timeout, child.wait()).await {
         Err(_) => {
             let _ = child.kill().await;
-            cleanup_artifacts(&profile_dir, intermediate.as_deref(), Some(&output)).await;
             return Err(ConversionError::Timeout(timeout));
         }
-        Ok(result) => match result {
-            Ok(status) => status,
-            Err(error) => {
-                cleanup_artifacts(&profile_dir, intermediate.as_deref(), Some(&output)).await;
-                return Err(ConversionError::Wait(error));
-            }
-        },
+        Ok(result) => result.map_err(ConversionError::Wait)?,
     };
     if !status.success() {
-        cleanup_artifacts(&profile_dir, intermediate.as_deref(), Some(&output)).await;
         return Err(ConversionError::NonZeroExit(status.code()));
     }
 
-    let Ok(metadata) = tokio::fs::metadata(&output).await else {
-        cleanup_artifacts(&profile_dir, intermediate.as_deref(), Some(&output)).await;
-        return Err(ConversionError::MissingOutput);
-    };
+    let metadata = tokio::fs::metadata(&output)
+        .await
+        .map_err(|_| ConversionError::MissingOutput)?;
     if metadata.len() == 0 {
-        cleanup_artifacts(&profile_dir, intermediate.as_deref(), Some(&output)).await;
         return Err(ConversionError::EmptyOutput);
     }
-    cleanup_artifacts(&profile_dir, intermediate.as_deref(), None).await;
+    artifacts.keep_output();
     Ok(output)
 }
 
@@ -402,8 +421,52 @@ mod tests {
     use crate::ids;
 
     use super::{
-        SUPPORTED_EXTENSIONS, convert_to_pdf, is_passthrough_extension, render_markdown_to_html,
+        ConversionGuard, SUPPORTED_EXTENSIONS, convert_to_pdf, is_passthrough_extension,
+        render_markdown_to_html,
     };
+
+    #[test]
+    fn conversion_guard_removes_partial_artifacts_on_drop() {
+        let temp = std::env::temp_dir().join(format!("just-print-guard-{}", ids::new_id()));
+        assert!(std::fs::create_dir_all(temp.join("profile")).is_ok());
+        let intermediate = temp.join("doc.html");
+        let output = temp.join("doc.pdf");
+        assert!(std::fs::write(&intermediate, b"html").is_ok());
+        assert!(std::fs::write(&output, b"partial").is_ok());
+        {
+            let _guard = ConversionGuard::new(
+                temp.join("profile"),
+                Some(intermediate.clone()),
+                output.clone(),
+            );
+        }
+        assert!(!temp.join("profile").exists());
+        assert!(!intermediate.exists());
+        assert!(!output.exists());
+        let _ = std::fs::remove_dir_all(&temp);
+    }
+
+    #[test]
+    fn conversion_guard_keeps_successful_output_only() {
+        let temp = std::env::temp_dir().join(format!("just-print-guard-{}", ids::new_id()));
+        assert!(std::fs::create_dir_all(temp.join("profile")).is_ok());
+        let intermediate = temp.join("doc.html");
+        let output = temp.join("doc.pdf");
+        assert!(std::fs::write(&intermediate, b"html").is_ok());
+        assert!(std::fs::write(&output, b"%PDF-1.7").is_ok());
+        {
+            let mut guard = ConversionGuard::new(
+                temp.join("profile"),
+                Some(intermediate.clone()),
+                output.clone(),
+            );
+            guard.keep_output();
+        }
+        assert!(output.exists());
+        assert!(!intermediate.exists());
+        assert!(!temp.join("profile").exists());
+        let _ = std::fs::remove_dir_all(&temp);
+    }
 
     #[tokio::test]
     async fn markdown_renders_headings_code_and_tables() {

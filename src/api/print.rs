@@ -100,7 +100,7 @@ pub async fn submit(
         None => None,
     };
 
-    let task = tokio::spawn(run_submission(
+    let task = state.print_tasks.spawn(run_submission(
         Arc::clone(&state),
         request,
         key,
@@ -233,6 +233,7 @@ async fn submit_inner(
         printer_id: printer.name.clone(),
         created_at_ms,
         options: request.options.clone(),
+        terminal_status: None,
     });
     state.metrics.inc("print_jobs", &[("outcome", "submitted")]);
     tracing::info!(
@@ -282,6 +283,7 @@ async fn reconcile(
         printer_id: request.printer_id.clone(),
         created_at_ms,
         options: request.options.clone(),
+        terminal_status: None,
     });
     state
         .metrics

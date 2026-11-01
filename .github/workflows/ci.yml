@@ -116,9 +116,8 @@ jobs:
         run: scripts/smoke.sh
 
   # ------------------------------------------------------------ 依赖与镜像安全
-  # 只对 Rust advisory + license、前端 npm advisory、镜像漏洞做门禁。
-  # `cargo audit` 的 bans 子命令曾在多个依赖树里持续报红，已按「可操作的
-  # 漏洞」收缩为 advisories + licenses（见 justfile 的 audit 配方注释）。
+  # 对 Rust advisory、前端 npm advisory 与镜像漏洞做门禁。前端审计此前只存在
+  # 于本地 justfile，CI 实际没有执行；这里补齐，避免依赖公告只在本机可见。
   audit:
     name: Dependency audit
     runs-on: ubuntu-latest
@@ -136,6 +135,9 @@ jobs:
       - uses: rustsec/audit-check@69366f33c96575abad1ee0dba8212993eecbe998 # v2
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+      - name: Frontend dependency audit
+        run: cd frontend && bun audit --audit-level=high
 
   image:
     name: Build image

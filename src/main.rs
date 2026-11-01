@@ -75,9 +75,24 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         cups_server = %config.cups_server,
         "just-print 已启动"
     );
-    axum::serve(listener, app)
+    let serve_result = axum::serve(listener, app)
         .with_graceful_shutdown(shutdown_signal())
-        .await?;
+        .await;
+
+    // HTTP 请求已停止；等待客户端断开后仍在提交的打印任务完成对账，避免
+    // 容器滚动更新时留下结果未知的物理打印。
+    state.print_tasks.close();
+    if let Err(_elapsed) =
+        tokio::time::timeout(state.config.shutdown_timeout, state.print_tasks.wait()).await
+    {
+        tracing::warn!(
+            timeout_secs = state.config.shutdown_timeout.as_secs(),
+            "等待在途打印提交超时，仍有任务未结束"
+        );
+    } else {
+        info!("在途打印提交已全部结束");
+    }
+    serve_result?;
     Ok(())
 }
 

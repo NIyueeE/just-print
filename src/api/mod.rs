@@ -21,6 +21,7 @@ use axum::routing::{get, post};
 use tower_http::services::{ServeDir, ServeFile};
 use tower_http::set_header::SetResponseHeaderLayer;
 
+use crate::api::middleware as common_middleware;
 use crate::error::AppError;
 use crate::state::AppState;
 
@@ -47,15 +48,6 @@ fn api_router(state: &Arc<AppState>) -> Router {
             Arc::clone(state),
             auth::require_auth,
         ))
-        .layer(axum::middleware::from_fn_with_state(
-            Arc::clone(state),
-            middleware::timeout,
-        ))
-        .layer(axum::middleware::from_fn_with_state(
-            Arc::clone(state),
-            middleware::track,
-        ))
-        .layer(axum::middleware::from_fn(middleware::request_context))
         .layer(SetResponseHeaderLayer::overriding(
             header::CACHE_CONTROL,
             HeaderValue::from_static("no-store"),
@@ -68,9 +60,16 @@ pub fn router(state: &Arc<AppState>) -> Router {
     let web_dir = state.config.web_dir.clone();
     let index = web_dir.join("index.html");
     let api = api_router(state);
-    let mcp = crate::mcp::router(state, api.clone());
+    let mcp = crate::mcp::router(state, api.clone()).layer(SetResponseHeaderLayer::overriding(
+        header::CACHE_CONTROL,
+        HeaderValue::from_static("no-store"),
+    ));
     let uploads = Router::new()
         .route("/uploads/{ticket}", post(files::upload_by_ticket))
+        .layer(SetResponseHeaderLayer::overriding(
+            header::CACHE_CONTROL,
+            HeaderValue::from_static("no-store"),
+        ))
         .with_state(Arc::clone(state));
 
     let ready_state = Arc::clone(state);
@@ -110,6 +109,19 @@ pub fn router(state: &Arc<AppState>) -> Router {
                  base-uri 'none'; form-action 'self'; frame-ancestors 'none'",
             ),
         ))
+        // 公共横切行为覆盖 API、MCP、票据上传与健康检查；这三个 `from_fn`
+        // 只包裹响应建立过程，不会把静态文件或 SSE 正文整段缓冲。
+        .layer(axum::middleware::from_fn_with_state(
+            Arc::clone(state),
+            common_middleware::timeout,
+        ))
+        .layer(axum::middleware::from_fn_with_state(
+            Arc::clone(state),
+            common_middleware::track,
+        ))
+        .layer(axum::middleware::from_fn(
+            common_middleware::request_context,
+        ))
 }
 
 #[cfg(test)]
@@ -132,6 +144,7 @@ mod tests {
             cups_server: "127.0.0.1:631".to_string(),
             cups_scheme: "ipp".to_string(),
             max_upload_bytes: 64 * 1024 * 1024,
+            max_temp_bytes: 1024 * 1024 * 1024,
             conversion_timeout: Duration::from_mins(2),
             conversion_slots: 2,
             cleanup_interval: Duration::from_mins(1),
@@ -143,6 +156,9 @@ mod tests {
             idempotency_wait: Duration::from_secs(5),
             upload_slots: 4,
             request_timeout: Duration::from_mins(5),
+            shutdown_timeout: Duration::from_secs(30),
+            ready_timeout: Duration::from_secs(3),
+            public_base_url: None,
         }
     }
 
@@ -276,6 +292,153 @@ mod tests {
             "cancel_job",
         ] {
             assert!(body.contains(tool), "缺少工具 {tool}: {body}");
+        }
+    }
+
+    /// 公共中间件必须覆盖健康检查、MCP 与票据通道，而不只是 /api。
+    #[tokio::test]
+    async fn common_middleware_covers_health_mcp_and_tickets() {
+        let Some(state) = test_state(temp_web_dir()) else {
+            return;
+        };
+        let app = super::router(&state);
+        let Ok(request) = Request::builder()
+            .uri("/healthz")
+            .header("x-request-id", "probe-123")
+            .body(Body::empty())
+        else {
+            return;
+        };
+        let response = app
+            .clone()
+            .oneshot(request)
+            .await
+            .unwrap_or_else(|never| match never {});
+        assert_eq!(
+            response
+                .headers()
+                .get("x-request-id")
+                .and_then(|value| value.to_str().ok()),
+            Some("probe-123")
+        );
+        assert_eq!(
+            response
+                .headers()
+                .get("x-content-type-options")
+                .and_then(|value| value.to_str().ok()),
+            Some("nosniff")
+        );
+
+        let Ok(request) = Request::builder()
+            .uri("/uploads/not-a-ticket")
+            .method("POST")
+            .body(Body::empty())
+        else {
+            return;
+        };
+        let response = app
+            .clone()
+            .oneshot(request)
+            .await
+            .unwrap_or_else(|never| match never {});
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+        assert_eq!(
+            response
+                .headers()
+                .get(header::CACHE_CONTROL)
+                .and_then(|value| value.to_str().ok()),
+            Some("no-store")
+        );
+        assert!(
+            response.headers().contains_key("x-request-id"),
+            "票据上传也应带请求 id"
+        );
+
+        let Ok(request) = Request::builder()
+            .uri("/mcp")
+            .method("POST")
+            .header(header::AUTHORIZATION, "Bearer test-token")
+            .header("x-just-print-device", "office/../../etc")
+            .body(Body::empty())
+        else {
+            return;
+        };
+        let response = app
+            .oneshot(request)
+            .await
+            .unwrap_or_else(|never| match never {});
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        assert_eq!(
+            response
+                .headers()
+                .get(header::CACHE_CONTROL)
+                .and_then(|value| value.to_str().ok()),
+            Some("no-store")
+        );
+    }
+
+    #[tokio::test]
+    async fn mcp_legacy_initialize_handshake_is_still_supported() {
+        let Some(state) = test_state(temp_web_dir()) else {
+            return;
+        };
+        let app = super::router(&state);
+        let payload = concat!(
+            "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{",
+            "\"protocolVersion\":\"2025-11-25\",\"capabilities\":{},",
+            "\"clientInfo\":{\"name\":\"compat-test\",\"version\":\"1.0.0\"}}}"
+        );
+        let Ok(request) = Request::builder()
+            .uri("/mcp")
+            .method("POST")
+            .header(header::HOST, "localhost")
+            .header("mcp-protocol-version", "2025-11-25")
+            .header("x-just-print-device", "office")
+            .header(header::AUTHORIZATION, "Bearer test-token")
+            .header(header::CONTENT_TYPE, "application/json")
+            .header(header::ACCEPT, "application/json, text/event-stream")
+            .body(Body::from(payload.to_string()))
+        else {
+            return;
+        };
+        let (status, body) = response_body(app, request).await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert!(
+            body.contains("2025-11-25") || body.contains("2025-06-18"),
+            "legacy initialize 应协商出受支持的协议版本: {body}"
+        );
+    }
+
+    #[tokio::test]
+    async fn mcp_device_cache_recovers_instead_of_rejecting_new_devices() {
+        let Some(state) = test_state(temp_web_dir()) else {
+            return;
+        };
+        let app = super::router(&state);
+        let payload = concat!(
+            "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/list\",\"params\":{",
+            "\"_meta\":{\"io.modelcontextprotocol/protocolVersion\":\"2026-07-28\",",
+            "\"io.modelcontextprotocol/clientCapabilities\":{}}}}"
+        );
+        for index in 0..40 {
+            let request = Request::builder()
+                .uri("/mcp")
+                .method("POST")
+                .header(header::HOST, "localhost")
+                .header("mcp-protocol-version", "2026-07-28")
+                .header("x-just-print-device", format!("printer-{index}"))
+                .header(header::AUTHORIZATION, "Bearer test-token")
+                .header(header::CONTENT_TYPE, "application/json")
+                .header(header::ACCEPT, "application/json, text/event-stream")
+                .header("mcp-method", "tools/list")
+                .body(Body::from(payload.to_string()));
+            let Ok(request) = request else { return };
+            let (status, body) = response_body(app.clone(), request).await;
+            assert_eq!(
+                status,
+                StatusCode::OK,
+                "第 {index} 个设备应能使用（容量应可回收）: {body}"
+            );
         }
     }
 

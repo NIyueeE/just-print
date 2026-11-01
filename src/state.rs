@@ -71,6 +71,8 @@ pub struct AppState {
     pub upload_slots: Arc<Semaphore>,
     /// 临时文件目录。
     pub temp_dir: PathBuf,
+    /// 已受理、仍在执行的打印提交；停机时用于 drain。
+    pub print_tasks: tokio_util::task::TaskTracker,
 }
 
 impl AppState {
@@ -88,7 +90,7 @@ impl AppState {
             config.job_cache_ttl,
         )?;
         Ok(Self {
-            files: Arc::new(FileStore::default()),
+            files: Arc::new(FileStore::with_capacity(config.max_temp_bytes)),
             cups: Arc::new(cups),
             jobs: JobRegistry::new(JOB_REGISTRY_TTL, JOB_REGISTRY_CAPACITY),
             idempotency: IdempotencyStore::new(config.idempotency_ttl, IDEMPOTENCY_CAPACITY),
@@ -98,6 +100,7 @@ impl AppState {
             upload_slots: Arc::new(Semaphore::new(config.upload_slots)),
             config,
             temp_dir,
+            print_tasks: tokio_util::task::TaskTracker::new(),
         })
     }
 }

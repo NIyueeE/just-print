@@ -18,6 +18,7 @@ use std::path::Path;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use futures_util::StreamExt;
 use ipp::attribute::{IppAttribute, IppAttributeGroup};
 use ipp::error::IppError;
 use ipp::model::{DelimiterTag, IppVersion, JobState, Operation, PrinterState, StatusCode};
@@ -33,8 +34,24 @@ use tracing::{debug, warn};
 
 /// 提交给 CUPS 的 `requesting-user-name`。
 pub const CUPS_USER: &str = "just-print";
+
+/// CUPS 队列名是否只含可安全放入 IPP URI 的字符。
+///
+/// CUPS 自己允许的队列名更宽，但应用需要先排除 `/`、空白和控制字符，
+/// 才能把名称安全拼进 `/printers/{name}`，并让 MCP 设备头可预测。
+#[must_use]
+pub fn is_valid_printer_name(name: &str) -> bool {
+    !name.is_empty()
+        && name
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_' | '.'))
+}
 /// 打印文档的 MIME 类型。
 pub const APPLICATION_PDF: &str = "application/pdf";
+/// 任务状态缓存条数上限；任务 id 会随 CUPS 增长，缓存必须有界。
+const JOB_CACHE_CAPACITY: usize = 1024;
+/// 并行读取多台打印机选项目录的上限，避免刷新时串行放大延迟。
+const OPTION_FETCH_CONCURRENCY: usize = 4;
 
 /// CUPS 集成错误。
 #[derive(Debug, Error)]
@@ -340,6 +357,8 @@ impl CupsClient {
             return Ok(cached);
         }
         let uri = self.printer_uri(printer_name)?;
+        // 先把过期项清掉，后续插入不会让缓存无限增长。
+        self.prune_job_cache().await;
         let operation = IppOperationBuilder::get_job_attributes(uri.clone(), cups_job_id)
             .user_name(CUPS_USER)
             .build()
@@ -353,7 +372,18 @@ impl CupsClient {
             Err(CupsError::NotFound) => None,
             Err(error) => return Err(error),
         };
-        self.jobs.lock().await.insert(
+        let mut jobs = self.jobs.lock().await;
+        while jobs.len() >= JOB_CACHE_CAPACITY {
+            let oldest = jobs
+                .iter()
+                .min_by_key(|(_, cached)| cached.at)
+                .map(|(key, _)| key.clone());
+            let Some(oldest) = oldest else {
+                break;
+            };
+            jobs.remove(&oldest);
+        }
+        jobs.insert(
             key,
             Cached {
                 value: info.clone(),
@@ -441,9 +471,21 @@ impl CupsClient {
     }
 
     async fn cached_job(&self, key: &str) -> Option<Option<JobInfo>> {
-        let guard = self.jobs.lock().await;
-        let cached = guard.get(key)?;
-        (cached.at.elapsed() < self.job_ttl).then(|| cached.value.clone())
+        let mut guard = self.jobs.lock().await;
+        match guard.get(key) {
+            Some(cached) if cached.at.elapsed() < self.job_ttl => Some(cached.value.clone()),
+            Some(_) => {
+                guard.remove(key);
+                None
+            }
+            None => None,
+        }
+    }
+
+    async fn prune_job_cache(&self) {
+        let ttl = self.job_ttl;
+        let mut jobs = self.jobs.lock().await;
+        jobs.retain(|_, cached| cached.at.elapsed() < ttl);
     }
 
     async fn fetch_printers(&self) -> Result<Vec<PrinterInfo>, CupsError> {
@@ -460,16 +502,22 @@ impl CupsClient {
                 printers.push(printer);
             }
         }
-        for printer in &mut printers {
-            let name = printer.name.clone();
-            match self.fetch_options(&name).await {
-                Ok(options) => printer.options = options,
-                Err(error) => {
-                    warn!(printer = %name, error = %error, "读取打印机选项失败");
-                    printer.options_error = Some(error.to_string());
+        let loaded =
+            futures_util::stream::iter(printers.into_iter().map(|mut printer| async move {
+                let name = printer.name.clone();
+                match self.fetch_options(&name).await {
+                    Ok(options) => printer.options = options,
+                    Err(error) => {
+                        warn!(printer = %name, error = %error, "读取打印机选项失败");
+                        printer.options_error = Some(error.to_string());
+                    }
                 }
-            }
-        }
+                printer
+            }))
+            .buffered(OPTION_FETCH_CONCURRENCY)
+            .collect::<Vec<_>>()
+            .await;
+        let mut printers = loaded;
         printers.sort_by(|left, right| left.name.cmp(&right.name));
         Ok(printers)
     }
@@ -488,11 +536,7 @@ impl CupsClient {
     }
 
     fn printer_uri(&self, name: &str) -> Result<Uri, CupsError> {
-        let safe = !name.is_empty()
-            && name
-                .chars()
-                .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_' | '.'));
-        if !safe {
+        if !is_valid_printer_name(name) {
             return Err(CupsError::Protocol(format!("非法打印机名: {name}")));
         }
         format!("{}://{}/printers/{name}", self.scheme, self.server)
@@ -769,9 +813,19 @@ mod tests {
 
     use super::options::{EnumValue, OptionKind, OptionSpec, ResolutionValue};
     use super::{
-        JobStatus, PrinterStateView, encode_job_attributes, job_from_group, printer_from_group,
-        truncate_name,
+        JobStatus, PrinterStateView, encode_job_attributes, is_valid_printer_name, job_from_group,
+        printer_from_group, truncate_name,
     };
+
+    #[test]
+    fn validates_safe_printer_names() {
+        for valid in ["office", "CUPS-PDF", "My_Printer.v2"] {
+            assert!(is_valid_printer_name(valid), "{valid} 应合法");
+        }
+        for invalid in ["", "a b", "a/b", "路径", "a\nb"] {
+            assert!(!is_valid_printer_name(invalid), "{invalid:?} 不应合法");
+        }
+    }
 
     fn attrs(items: Vec<(&str, IppValue)>) -> IppAttributes {
         let mut attributes = IppAttributes::new();

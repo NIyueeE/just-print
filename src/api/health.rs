@@ -13,12 +13,28 @@ pub async fn healthz() -> &'static str {
     "ok"
 }
 
-/// 就绪探针：确认 CUPS 能响应 IPP 请求。
+/// 就绪探针：确认 CUPS 能在探针预算内响应 IPP 请求。
 pub async fn readyz(state: Arc<AppState>) -> Response {
-    match state.cups.ready().await {
-        Ok(()) => (StatusCode::OK, "ready").into_response(),
-        Err(error) => {
+    match tokio::time::timeout(state.config.ready_timeout, state.cups.ready()).await {
+        Ok(Ok(())) => {
+            state.metrics.inc("readiness_checks", &[("outcome", "ok")]);
+            (StatusCode::OK, "ready").into_response()
+        }
+        Ok(Err(error)) => {
+            state
+                .metrics
+                .inc("readiness_checks", &[("outcome", "error")]);
             tracing::warn!(error = %error, "就绪探针失败");
+            (StatusCode::SERVICE_UNAVAILABLE, "cups unavailable").into_response()
+        }
+        Err(_) => {
+            state
+                .metrics
+                .inc("readiness_checks", &[("outcome", "timeout")]);
+            tracing::warn!(
+                timeout_secs = state.config.ready_timeout.as_secs(),
+                "就绪探针超时"
+            );
             (StatusCode::SERVICE_UNAVAILABLE, "cups unavailable").into_response()
         }
     }
@@ -45,6 +61,16 @@ pub async fn metrics(State(state): State<Arc<AppState>>) -> Response {
         "idempotency_entries",
         &[],
         i64::try_from(state.idempotency.len()).unwrap_or(i64::MAX),
+    );
+    state.metrics.set_gauge(
+        "active_tickets",
+        &[],
+        i64::try_from(state.tickets.len()).unwrap_or(i64::MAX),
+    );
+    state.metrics.set_gauge(
+        "in_flight_print_tasks",
+        &[],
+        i64::try_from(state.print_tasks.len()).unwrap_or(i64::MAX),
     );
     (
         [(

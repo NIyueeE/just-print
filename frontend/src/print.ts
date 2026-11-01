@@ -4,13 +4,15 @@
  * 与 UI 解耦，便于单测；组件只调用 `submit(pending)`。
  * ========================================================================== */
 
-import { useCallback, useRef } from 'preact/hooks'
+import { useCallback, useEffect, useRef } from 'preact/hooks'
 import {
   ApiError,
+  currentSessionEpoch,
   errorMessage,
   isAbortError,
   isIdempotencyConflict,
   isRetryable,
+  isSessionEpochCurrent,
   submitPrint,
   type JobView,
   type PrintResponse,
@@ -129,8 +131,23 @@ export function usePrintSubmission(): PrintSubmission {
   attemptRef.current = state.print.attempt
   const controllerRef = useRef<AbortController | null>(null)
 
+  const cancel = useCallback((): void => {
+    controllerRef.current?.abort()
+    controllerRef.current = null
+  }, [])
+
+  // 退出登录会先递增会话代次；取消等待并确保旧响应永远不能写回。
+  useEffect(() => {
+    if (state.token === '') {
+      cancel()
+    }
+  }, [cancel, state.token])
+
+  useEffect(() => () => cancel(), [cancel])
+
   const submit = useCallback(
     async (pending: PendingPrint): Promise<void> => {
+      const epoch = currentSessionEpoch()
       const fingerprint = printFingerprint(pending.payload)
       const { attempt, reused } = resolveAttempt(attemptRef.current, fingerprint)
       dispatch({ type: 'print/begin', attempt })
@@ -141,6 +158,9 @@ export function usePrintSubmission(): PrintSubmission {
 
       try {
         const response = await submitWithRetry(pending, attempt.key, controller.signal)
+        if (!isSessionEpochCurrent(epoch)) {
+          return
+        }
         dispatch({ type: 'jobs/upsert', jobs: [acceptedJobToView(response, pending)] })
         dispatch({ type: 'print/settled' })
         dispatch({
@@ -155,6 +175,9 @@ export function usePrintSubmission(): PrintSubmission {
           ),
         })
       } catch (error) {
+        if (!isSessionEpochCurrent(epoch)) {
+          return
+        }
         if (isAbortError(error)) {
           // 取消提交必须复位 UI：只 return 会让确认对话框永远停在 busy。
           dispatch({ type: 'print/abort' })
@@ -177,13 +200,8 @@ export function usePrintSubmission(): PrintSubmission {
         }
       }
     },
-    [attemptRef, authGuard, dispatch],
+    [attemptRef, authGuard, cancel, dispatch],
   )
-
-  const cancel = useCallback((): void => {
-    controllerRef.current?.abort()
-    controllerRef.current = null
-  }, [])
 
   return { submit, cancel }
 }

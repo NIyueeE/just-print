@@ -49,8 +49,14 @@ claude mcp add --transport http just-print-office \
 ```
 
 `X-Just-Print-Device` 是 CUPS 队列名，必须是 `GET /api/printers` 返回的 `id`；
-缺这个头直接返回 `400`。想要第二台打印机就再配一个条目——一个连接只对应一台设备，
-模型既看不到别的队列，也改不了目标。
+只允许字母、数字、点、下划线与连字符，最长 64 字节，缺头或非法直接返回 `400`。
+想要第二台打印机就再配一个条目——一个连接只对应一台设备，模型既看不到别的队列，
+也改不了目标。
+
+服务部署在反向代理或 TLS 网关之后时，必须设置
+`JUST_PRINT_PUBLIC_BASE_URL=https://print.example.com`。MCP 用它生成上传地址，
+不会信任可被客户端伪造的 `X-Forwarded-Proto`；未配置时只从通过严格校验的
+`Host` 推导 `http://` 地址。
 
 令牌只出现在 HTTP 头里，不经过模型上下文，也不会被写进命令行。
 
@@ -78,7 +84,7 @@ claude mcp add --transport http just-print-office \
    ```json
    {
      "upload_url": "http://192.168.1.10:8080/uploads/9f1c0b7a...",
-     "curl": "curl -sS -X POST --data-binary @{path} 'http://192.168.1.10:8080/uploads/9f1c0b7a...'",
+     "curl": "curl -sS --fail-with-body -X POST --data-binary @\"{path}\" -- 'http://192.168.1.10:8080/uploads/9f1c0b7a...'",
      "expires_in_secs": 300
    }
    ```
@@ -87,15 +93,17 @@ claude mcp add --transport http just-print-office \
    从而损坏 PDF）：
 
    ```bash
-   curl -sS -X POST --data-binary @$HOME/reports/q3.pdf \
-     'http://192.168.1.10:8080/uploads/9f1c0b7a...'
+   curl -sS --fail-with-body -X POST --data-binary @"$HOME/reports/q3.pdf" \
+     -- 'http://192.168.1.10:8080/uploads/9f1c0b7a...'
    # {"id":"733d6aaf...","name":"q3.pdf","size":482913}
    ```
 
 4. `print_document({"file_id": "733d6aaf...", "options": {"sides": "two-sided-long-edge"}})`
 5. 需要跟进度时 `get_job({"job_id": "office-8"})`。
 
-`upload_url` 是从请求的 `Host` 头推出来的；经过反向代理时以代理对外暴露的地址为准。
+`upload_url` 优先来自 `JUST_PRINT_PUBLIC_BASE_URL`；没有配置时才从经过严格
+authority 校验的 `Host` 头推导。经过反向代理或使用 HTTPS 时必须显式配置公共
+基地址，否则生成的上传地址可能是内部地址或 `http://`。
 
 ## 上传票据
 
@@ -138,6 +146,8 @@ claude mcp add --transport http just-print-office \
 - 端点与 `/api` 共用同一个 Bearer 令牌，鉴权在进入 MCP 之前完成。
 - 设备由请求头 `X-Just-Print-Device` 指定；每个连接只操作那一台设备，`cancel_job` / `get_job` 还会校验
   `job_id` 的设备前缀。
+- 上传地址来自显式配置或严格校验的 `Host`；不会信任 `X-Forwarded-*`，生成的
+  `curl` 还会对 URL 做 shell 引用。
 - 服务不启用 CORS，跨站请求拿不到令牌；因此 MCP 端点没有额外做 Origin 白名单
   （反向代理域名千变万化，白名单反而容易配错）。
 - 建议给 MCP 和网页端使用同一个令牌的前提下，把服务放在内网或 TLS 网关之后。
@@ -146,6 +156,7 @@ claude mcp add --transport http just-print-office \
 
 - 需要 agent 能执行 shell（Claude Code、Cursor agent 可以；纯 GUI 客户端不行）。
 - 只接受 PDF ≤ `JUST_PRINT_MAX_UPLOAD_BYTES`（默认 64 MiB）。
-- `list_jobs` 在服务端分页之后按设备过滤，任务极多时可能少返回几条；
-  需要精确结果时用 `get_job`。
-- 同时缓存的设备端点上限 32；超出返回 `400`（正常部署远达不到）。
+- 同时缓存的设备端点上限 32。达到上限时会先回收闲置超过 30 分钟、且没有在途
+  请求的设备；只有所有设备都在处理请求时才返回可重试的 `503`，不会永久拒绝新设备。
+- 长时间无活动的 legacy MCP 会话可能随设备缓存回收而被关闭，客户端重新
+  `initialize` 即可；`2026-07-28` 无状态协议不受影响。

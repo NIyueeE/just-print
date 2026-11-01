@@ -1,6 +1,6 @@
 [package]
 name = "just-print"
-version = "0.4.0"
+version = "0.4.1"
 edition = "2024"
 description = "A lightweight web service for printing documents via CUPS"
 license = "MIT"
@@ -20,7 +20,7 @@ serde_json = "1.0.154"
 subtle = "2.6.1"
 thiserror = "2.0.21"
 tokio = { version = "1.54", features = ["fs", "io-util", "macros", "net", "process", "rt-multi-thread", "signal", "sync", "time"] }
-tokio-util = { version = "0.7", features = ["io", "compat"] }
+tokio-util = { version = "0.7", features = ["io", "compat", "rt"] }
 tower = { version = "0.5", features = ["util"] }
 tower-http = { version = "0.7", features = ["fs", "request-id", "set-header", "timeout", "trace"] }
 tracing = { version = "0.1.44", default-features = false, features = ["std"] }

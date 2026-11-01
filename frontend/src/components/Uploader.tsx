@@ -1,11 +1,13 @@
 import { useEffect, useRef, useState } from 'preact/hooks'
 import {
   ApiError,
+  currentSessionEpoch,
   deleteFile,
   errorMessage,
   fetchPreview,
   getFormats,
   isAbortError,
+  isSessionEpochCurrent,
   uploadFile,
   type Formats,
 } from '../api'
@@ -219,11 +221,14 @@ export function Uploader() {
 
   /** 重新拉取 /api/formats（首次加载失败后由用户手动触发）。 */
   async function reloadFormats(): Promise<void> {
+    const epoch = currentSessionEpoch()
     try {
       const loaded = await getFormats()
-      dispatch({ type: 'formats/loaded', formats: loaded })
+      if (isSessionEpochCurrent(epoch)) {
+        dispatch({ type: 'formats/loaded', formats: loaded })
+      }
     } catch (requestError) {
-      if (authGuard(requestError)) {
+      if (!isSessionEpochCurrent(epoch) || authGuard(requestError)) {
         return
       }
       dispatch({ type: 'formats/error', message: errorMessage(requestError) })
@@ -231,13 +236,14 @@ export function Uploader() {
   }
 
   async function loadPreview(fileId: string): Promise<void> {
+    const epoch = currentSessionEpoch()
     previewControllerRef.current?.abort()
     const controller = new AbortController()
     previewControllerRef.current = controller
     dispatch({ type: 'upload/preview-loading' })
     try {
       const blob = await fetchPreview(fileId, controller.signal)
-      if (controller.signal.aborted) {
+      if (controller.signal.aborted || !isSessionEpochCurrent(epoch)) {
         return
       }
       dispatch({ type: 'upload/preview-ready', url: URL.createObjectURL(blob) })
@@ -245,7 +251,7 @@ export function Uploader() {
       if (controller.signal.aborted || isAbortError(requestError)) {
         return
       }
-      if (authGuard(requestError)) {
+      if (!isSessionEpochCurrent(epoch) || authGuard(requestError)) {
         return
       }
       const message =
@@ -265,13 +271,21 @@ export function Uploader() {
     previewControllerRef.current?.abort()
     previewControllerRef.current = null
     const controller = new AbortController()
+    const epoch = currentSessionEpoch()
     uploadControllerRef.current = controller
     dispatch({ type: 'upload/start' })
     try {
       const result = await uploadFile(file, {
         signal: controller.signal,
-        onProgress: (percent) => dispatch({ type: 'upload/progress', percent }),
+        onProgress: (percent) => {
+          if (isSessionEpochCurrent(epoch) && !controller.signal.aborted) {
+            dispatch({ type: 'upload/progress', percent })
+          }
+        },
       })
+      if (!isSessionEpochCurrent(epoch) || controller.signal.aborted) {
+        return
+      }
       dispatch({ type: 'upload/success', result })
       dispatch({
         type: 'notice/add',
@@ -279,6 +293,9 @@ export function Uploader() {
       })
       void loadPreview(result.id)
     } catch (requestError) {
+      if (!isSessionEpochCurrent(epoch)) {
+        return
+      }
       if (controller.signal.aborted || isAbortError(requestError)) {
         dispatch({ type: 'upload/select', file })
         dispatch({ type: 'notice/add', notice: createNotice('info', '已取消上传') })
@@ -311,10 +328,11 @@ export function Uploader() {
     if (result === null) {
       return
     }
+    const epoch = currentSessionEpoch()
     try {
       await deleteFile(result.id)
     } catch (error) {
-      if (isAbortError(error)) {
+      if (!isSessionEpochCurrent(epoch) || isAbortError(error)) {
         return
       }
       if (authGuard(error)) {

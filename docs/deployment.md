@@ -12,7 +12,7 @@
 ```bash
 export JUST_PRINT_TOKEN="$(openssl rand -hex 32)"
 
-docker run -d --name just-print -p 8080:8080 \
+docker run -d --name just-print -p 8080:8080 --stop-timeout 45 \
   -e JUST_PRINT_TOKEN="$JUST_PRINT_TOKEN" \
   ghcr.io/niyueee/just-print:latest
 ```
@@ -83,7 +83,9 @@ Tmpfs=/tmp
 | `JUST_PRINT_AUTO_USB` | `1` | 启动时自动枚举 USB 打印机并创建 CUPS 队列 |
 | `JUST_PRINT_USB_PPD` | 空 | 自动添加 USB 打印机时固定的 PPD；留空按型号匹配（镜像内置 HPLIP PCL 驱动） |
 | `JUST_PRINT_USB_OPTIONS` | 空 | USB 队列的额外 PPD 选项（逗号或空格分隔的 `key=value`），用于声明硬件事实，如双面器 `Option1=True` |
+| `JUST_PRINT_PUBLIC_BASE_URL` | 空 | MCP 生成上传地址使用的对外 origin（如 `https://print.example.com`）。反代/HTTPS 部署必须配置；只允许无路径、无查询串的 `http(s)://host[:port]` |
 | `JUST_PRINT_MAX_UPLOAD_BYTES` | `67108864` | 单文件上传上限（字节，默认 64 MiB） |
+| `JUST_PRINT_MAX_TEMP_BYTES` | `1073741824` | 已转换文件占用临时目录的总字节上限（默认 1 GiB）；达到上限后新上传返回可重试的 503 |
 | `JUST_PRINT_UPLOAD_SLOTS` | `4` | 并发上传上限 |
 | `JUST_PRINT_CONVERSION_SLOTS` | `2` | 并发 LibreOffice 转换上限 |
 | `JUST_PRINT_CONVERSION_TIMEOUT_SECS` | `120` | 单次转换超时（秒） |
@@ -95,10 +97,25 @@ Tmpfs=/tmp
 | `JUST_PRINT_IDEMPOTENCY_TTL_SECS` | `600` | 幂等键保留时长（秒） |
 | `JUST_PRINT_IDEMPOTENCY_WAIT_SECS` | `15` | 同键重试等待在途请求完成的最长时间（秒）；超时才回 `409` + `Retry-After` |
 | `JUST_PRINT_REQUEST_TIMEOUT_SECS` | `300` | 单个 HTTP 请求处理超时（秒） |
+| `JUST_PRINT_SHUTDOWN_TIMEOUT_SECS` | `30` | 停机时等待在途打印提交完成对账的上限（秒） |
+| `JUST_PRINT_READY_TIMEOUT_SECS` | `3` | `/readyz` 查询 CUPS 的超时（秒）；应短于容器健康检查的 5 秒超时 |
 | `RUST_LOG` | `info` | tracing 日志过滤（如 `just_print=debug`） |
 
 除 `JUST_PRINT_TOKEN` 外，上表所有变量都可以省略；`examples/` 下的 Compose /
 Quadlet / env 示例只保留必填项，可选项均以注释列出。
+
+以下组合约束会在启动时校验，不满足则拒绝启动：
+
+- `JUST_PRINT_IDEMPOTENCY_TTL_SECS` 至少为 `3 × JUST_PRINT_IPP_TIMEOUT_SECS`，
+  保证一次提交及其失败对账期间幂等键不会提前过期。
+- `JUST_PRINT_TEMP_TTL_SECS` 必须大于 `JUST_PRINT_CONVERSION_TIMEOUT_SECS`，
+  避免兜底清理删除仍在转换中的中间文件。
+- `JUST_PRINT_MAX_TEMP_BYTES` 不能小于 `JUST_PRINT_MAX_UPLOAD_BYTES`。
+
+编排器/容器运行时的停止宽限期应大于 `JUST_PRINT_SHUTDOWN_TIMEOUT_SECS`（默认
+30 秒）。Docker 使用 `--stop-timeout 45`；Compose 示例设置
+`stop_grace_period: 45s`；Quadlet 示例设置 `TimeoutStopSec=45`。否则运行时会在
+在途打印提交完成对账前发送 SIGKILL。
 
 ## 打印机配置
 
@@ -224,6 +241,8 @@ grep 'Ghostscript command line' /var/log/cups/error_log | tail -1   # 看 -r 是
 
 - 后端只提供 HTTP，证书在云网关（ALB / Ingress / Caddy / nginx 等）处终结，再
   转发到已发布的 8080 端口。
+- 使用 MCP 且经过反代时设置 `JUST_PRINT_PUBLIC_BASE_URL=https://<对外域名>`；
+  MCP 不信任可伪造的 `X-Forwarded-Proto`，未配置时只会生成 `http://` 地址。
 - 除健康检查外，`/api/*` 请求必须携带 `Authorization: Bearer <token>`（常量时间
   比较）；不使用 Cookie 与会话，无 CSRF 问题。
 - CUPS 默认只监听容器内部 `127.0.0.1:631`，不对外暴露。
@@ -252,7 +271,9 @@ AddDevice=/dev/bus/usb:/dev/bus/usb
 ## 临时文件
 
 文档转换使用容器内 `/tmp`。Compose 与 Quadlet 示例均将其挂为 `tmpfs`：容器重启
-即清空，避免残留。后端同时会清理无引用且超过 TTL（默认 30 分钟）的临时文件。
+即清空，避免残留。后端会清理无引用且超过 TTL（默认 30 分钟）的临时文件，并对
+已转换文件总量执行 `JUST_PRINT_MAX_TEMP_BYTES` 上限；达到上限时新上传返回可重试
+的 `503`，已有任务不受影响。
 
 ## 常用 CUPS 命令
 

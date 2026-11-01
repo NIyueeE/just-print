@@ -54,23 +54,60 @@ impl Drop for FileGuard {
     }
 }
 
-/// 文件存储：id → 记录，带引用计数与 TTL 清理。
-#[derive(Debug, Default)]
+/// 文件存储：id → 记录，带引用计数、TTL 清理与总字节上限。
+#[derive(Debug)]
 pub struct FileStore {
     inner: Mutex<HashMap<String, FileRecord>>,
+    capacity_bytes: u64,
+}
+
+impl Default for FileStore {
+    fn default() -> Self {
+        Self::with_capacity(u64::MAX)
+    }
 }
 
 impl FileStore {
-    /// 登记一个新文件（引用计数为 0）。
+    /// 以临时文件总字节上限构造。
+    #[must_use]
+    pub fn with_capacity(capacity_bytes: u64) -> Self {
+        Self {
+            inner: Mutex::new(HashMap::new()),
+            capacity_bytes,
+        }
+    }
+
+    /// 登记一个新文件（引用计数为 0），忽略容量错误。
+    ///
+    /// 生产代码应使用 [`FileStore::try_insert`] 并把容量错误转成可重试响应；
+    /// 此方法只保留给测试。
+    #[cfg(test)]
     pub fn insert(&self, id: String, name: String, path: PathBuf, size: u64) {
-        let record = FileRecord {
-            path,
-            name,
-            size,
-            created_at: Instant::now(),
-            references: 0,
-        };
-        self.lock().insert(id, record);
+        let _ = self.try_insert(id, name, path, size);
+    }
+
+    /// 在总字节上限内登记文件；超限时不改变存储并返回 `false`。
+    #[must_use]
+    pub fn try_insert(&self, id: String, name: String, path: PathBuf, size: u64) -> bool {
+        let mut inner = self.lock();
+        let used = inner
+            .values()
+            .try_fold(0_u64, |total, record| total.checked_add(record.size))
+            .unwrap_or(u64::MAX);
+        if used.saturating_add(size) > self.capacity_bytes {
+            return false;
+        }
+        inner.insert(
+            id,
+            FileRecord {
+                path,
+                name,
+                size,
+                created_at: Instant::now(),
+                references: 0,
+            },
+        );
+        true
     }
 
     /// 移除一个无引用的文件记录并返回其路径。
@@ -319,6 +356,28 @@ mod tests {
         assert!(!orphan.exists(), "过期的未登记残留应被清理");
         assert!(!profile.exists(), "过期的残留目录应被清理");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn capacity_rejects_new_files_without_evicting_existing_ones() {
+        let store = FileStore::with_capacity(10);
+        assert!(store.try_insert(
+            "a".to_string(),
+            "a.pdf".to_string(),
+            std::env::temp_dir().join("a.pdf"),
+            6,
+        ));
+        assert!(
+            !store.try_insert(
+                "b".to_string(),
+                "b.pdf".to_string(),
+                std::env::temp_dir().join("b.pdf"),
+                5,
+            ),
+            "超限文件不应登记"
+        );
+        assert!(store.contains("a"), "已有文件不得被淘汰");
+        assert_eq!(store.total_bytes(), 6);
     }
 
     #[test]

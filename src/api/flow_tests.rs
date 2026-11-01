@@ -138,7 +138,13 @@ async fn ipp_handler(body: Bytes) -> Response {
         add_job_attributes(&mut response, 5); // processing
     }
     if operation == Operation::GetJobs as i16 {
-        add_job_attributes(&mut response, 9); // completed
+        // ACTIVE 队列模拟仍在处理的任务，用于验证 active 过滤发生在截断之前。
+        let state = if printer_uri.contains("/printers/ACTIVE") {
+            5 // processing
+        } else {
+            9 // completed
+        };
+        add_job_attributes(&mut response, state);
     }
     (
         [(header::CONTENT_TYPE, "application/ipp")],
@@ -165,6 +171,7 @@ fn test_config(cups_server: &str, temp_dir: &std::path::Path) -> Config {
         cups_server: cups_server.to_string(),
         cups_scheme: "ipp".to_string(),
         max_upload_bytes: 1024 * 1024,
+        max_temp_bytes: 8 * 1024 * 1024,
         conversion_timeout: Duration::from_secs(5),
         conversion_slots: 1,
         cleanup_interval: Duration::from_secs(60),
@@ -176,6 +183,9 @@ fn test_config(cups_server: &str, temp_dir: &std::path::Path) -> Config {
         idempotency_wait: Duration::from_secs(5),
         upload_slots: 2,
         request_timeout: Duration::from_secs(30),
+        shutdown_timeout: Duration::from_secs(5),
+        ready_timeout: Duration::from_secs(3),
+        public_base_url: None,
     }
 }
 
@@ -185,10 +195,19 @@ async fn test_state() -> Option<(Arc<AppState>, std::path::PathBuf)> {
 }
 
 fn test_state_with(server: &str) -> Option<(Arc<AppState>, std::path::PathBuf)> {
+    test_state_with_config(server, None)
+}
+
+fn test_state_with_config(
+    server: &str,
+    public_base_url: Option<&str>,
+) -> Option<(Arc<AppState>, std::path::PathBuf)> {
     let temp = std::env::temp_dir().join(format!("just-print-flow-{}", crate::ids::new_id()));
     let _ = std::fs::create_dir_all(&temp);
     let _ = std::fs::write(temp.join("index.html"), "<div id=\"app\"></div>");
-    let state = AppState::new(test_config(server, &temp), temp.clone()).ok()?;
+    let mut config = test_config(server, &temp);
+    config.public_base_url = public_base_url.map(str::to_string);
+    let state = AppState::new(config, temp.clone()).ok()?;
     Some((Arc::new(state), temp))
 }
 
@@ -556,6 +575,13 @@ async fn upload_print_list_cancel_delete_flow() {
     };
     let (status, _, _) = call(&app, request).await;
     assert_eq!(status, StatusCode::NO_CONTENT);
+    let record = state.jobs.get("FAKE-7");
+    assert!(
+        record
+            .as_ref()
+            .is_some_and(|record| record.terminal_status == Some(crate::cups::JobStatus::Canceled)),
+        "取消状态必须保留在应用层登记表中"
+    );
 
     // 取消后文件允许删除。
     let Ok(request) = new_request("DELETE", &format!("/api/files/{file_id}")).body(Body::empty())
@@ -766,6 +792,7 @@ async fn job_list_survives_printer_removed_from_cups() {
         printer_id: "GONE".to_string(),
         created_at_ms: 1_785_833_607_000,
         options: BTreeMap::new(),
+        terminal_status: None,
     });
     let app = super::router(&state);
 
@@ -808,6 +835,235 @@ async fn job_list_survives_printer_removed_from_cups() {
     assert!(jobs.is_empty(), "active 列表不应包含已清理任务: {body}");
 }
 
+/// MCP 上传地址必须来自显式公共基地址，不能被 Host / X-Forwarded-Proto 降级。
+#[tokio::test]
+async fn mcp_ticket_uses_configured_public_base_url() {
+    let Some(server) = serve_fake_ipp().await else {
+        return;
+    };
+    let Some((state, _temp)) = test_state_with_config(&server, Some("https://print.example.com"))
+    else {
+        return;
+    };
+    let app = super::router(&state);
+    let payload = concat!(
+        "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{",
+        "\"name\":\"create_upload_ticket\",\"arguments\":{\"filename\":\"secure.pdf\"},",
+        "\"_meta\":{\"io.modelcontextprotocol/protocolVersion\":\"2026-07-28\",",
+        "\"io.modelcontextprotocol/clientCapabilities\":{}}}}"
+    );
+    let Ok(request) = Request::builder()
+        .uri("/mcp")
+        .method("POST")
+        .header(header::HOST, "attacker.example")
+        .header("x-forwarded-proto", "http")
+        .header("mcp-protocol-version", "2026-07-28")
+        .header("x-just-print-device", "CUPS-PDF")
+        .header(header::AUTHORIZATION, "Bearer test-token")
+        .header(header::CONTENT_TYPE, "application/json")
+        .header(header::ACCEPT, "application/json, text/event-stream")
+        .header("mcp-method", "tools/call")
+        .header("mcp-name", "create_upload_ticket")
+        .body(Body::from(payload.to_string()))
+    else {
+        return;
+    };
+    let (status, body, _) = call(&app, request).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert!(
+        body.contains("https://print.example.com/uploads/"),
+        "必须使用配置的 HTTPS 基地址: {body}"
+    );
+    assert!(
+        !body.contains("attacker.example"),
+        "不得信任请求 Host: {body}"
+    );
+    assert!(
+        body.contains("--fail-with-body"),
+        "生成的 curl 应使用安全失败参数: {body}"
+    );
+}
+
+/// 回归：MCP `print_document` 经内部 `/api/print` 路由提交时，必须能拿到
+/// `RequestId` 扩展并完成真实 IPP 提交，而不是返回空 500。
+#[tokio::test]
+async fn mcp_print_document_reaches_internal_api() {
+    let Some((state, _temp)) = test_state().await else {
+        return;
+    };
+    let Some(ticket) = state.tickets.issue("mcp-report.pdf".to_string()) else {
+        return;
+    };
+    let app = super::router(&state);
+    let pdf = b"%PDF-1.4\n1 0 obj<<>>endobj\ntrailer<<>>\n%%EOF\n".to_vec();
+    let Ok(request) = Request::builder()
+        .uri(format!("/uploads/{ticket}"))
+        .method("POST")
+        .body(Body::from(pdf))
+    else {
+        return;
+    };
+    let (status, upload_body, _) = call(&app, request).await;
+    assert_eq!(status, StatusCode::CREATED, "{upload_body}");
+    let uploaded: serde_json::Value =
+        serde_json::from_str(&upload_body).unwrap_or(serde_json::Value::Null);
+    let file_id = uploaded
+        .get("id")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or_default()
+        .to_string();
+    assert!(!file_id.is_empty(), "票据上传应返回 file_id");
+
+    let payload = format!(
+        "{{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{{\
+         \"name\":\"print_document\",\"arguments\":{{\"file_id\":\"{file_id}\",\"options\":{{}}}},\
+         \"_meta\":{{\"io.modelcontextprotocol/protocolVersion\":\"2026-07-28\",\
+         \"io.modelcontextprotocol/clientCapabilities\":{{}}}}}}}}"
+    );
+    let Ok(request) = Request::builder()
+        .uri("/mcp")
+        .method("POST")
+        .header(header::HOST, "localhost")
+        .header("mcp-protocol-version", "2026-07-28")
+        .header("x-just-print-device", "FAKE")
+        .header(header::AUTHORIZATION, "Bearer test-token")
+        .header(header::CONTENT_TYPE, "application/json")
+        .header(header::ACCEPT, "application/json, text/event-stream")
+        .header("mcp-method", "tools/call")
+        .header("mcp-name", "print_document")
+        .body(Body::from(payload))
+    else {
+        return;
+    };
+    let (status, body, _) = call(&app, request).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert!(
+        body.contains("\"job_id\":\"FAKE-7\""),
+        "MCP 打印应提交到假 CUPS 并返回任务: {body}"
+    );
+    assert!(
+        !body.contains("\"error\""),
+        "MCP 打印不应返回工具错误: {body}"
+    );
+}
+
+/// active 过滤必须在 limit 截断前生效：较早但仍活跃的任务不能因为新历史任务
+/// 占满 limit 而被漏掉（否则前端会误以为它已结束，进而停轮）。
+#[tokio::test]
+async fn active_filter_keeps_older_active_job_beyond_limit() {
+    let Some((state, _temp)) = test_state().await else {
+        return;
+    };
+    state.jobs.insert(crate::jobs::JobRecord {
+        id: "ACTIVE-7".to_string(),
+        file_id: "file-active".to_string(),
+        file_name: "active.pdf".to_string(),
+        printer_id: "ACTIVE".to_string(),
+        created_at_ms: 1_785_833_607_000,
+        options: BTreeMap::new(),
+        terminal_status: None,
+    });
+    for index in 0..10 {
+        state.jobs.insert(crate::jobs::JobRecord {
+            id: format!("FAKE-{}", 100 + index),
+            file_id: "file-done".to_string(),
+            file_name: "done.pdf".to_string(),
+            printer_id: "FAKE".to_string(),
+            created_at_ms: 1_785_833_607_000 + index,
+            options: BTreeMap::new(),
+            terminal_status: None,
+        });
+    }
+    let app = super::router(&state);
+    let Ok(request) = new_request("GET", "/api/jobs?active=true&limit=1").body(Body::empty())
+    else {
+        return;
+    };
+    let (status, body, _) = call(&app, request).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let listed: serde_json::Value = serde_json::from_str(&body).unwrap_or(serde_json::Value::Null);
+    let jobs = listed
+        .get("jobs")
+        .and_then(serde_json::Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    assert_eq!(jobs.len(), 1, "应返回仍在活动的任务: {body}");
+    assert_eq!(
+        jobs.first().and_then(|job| job.get("id")),
+        Some(&serde_json::Value::String("ACTIVE-7".to_string()))
+    );
+}
+
+/// 按设备过滤必须在 limit 截断前生效：GONE 的历史任务不能挤掉 FAKE 的任务。
+#[tokio::test]
+async fn job_list_filters_by_printer_before_limiting() {
+    let Some((state, _temp)) = test_state().await else {
+        return;
+    };
+    for (id, printer) in [("FAKE-7", "FAKE"), ("GONE-12", "GONE")] {
+        state.jobs.insert(crate::jobs::JobRecord {
+            id: id.to_string(),
+            file_id: "file".to_string(),
+            file_name: "doc.pdf".to_string(),
+            printer_id: printer.to_string(),
+            created_at_ms: 1_785_833_607_000,
+            options: BTreeMap::new(),
+            terminal_status: None,
+        });
+    }
+    let app = super::router(&state);
+    let Ok(request) = new_request("GET", "/api/jobs?printer_id=FAKE&limit=1").body(Body::empty())
+    else {
+        return;
+    };
+    let (status, body, _) = call(&app, request).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let listed: serde_json::Value = serde_json::from_str(&body).unwrap_or(serde_json::Value::Null);
+    let jobs = listed
+        .get("jobs")
+        .and_then(serde_json::Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    assert_eq!(jobs.len(), 1, "只应返回 FAKE 的任务: {body}");
+    assert_eq!(
+        jobs.first().and_then(|job| job.get("id")),
+        Some(&serde_json::Value::String("FAKE-7".to_string()))
+    );
+}
+
+/// CUPS 清理任务历史后，应用层记录的取消状态仍可通过单任务接口读取。
+#[tokio::test]
+async fn cancelled_job_stays_readable_after_cups_history_is_gone() {
+    let Some((state, _temp)) = test_state().await else {
+        return;
+    };
+    state.jobs.insert(crate::jobs::JobRecord {
+        id: "GONE-12".to_string(),
+        file_id: "file-canceled".to_string(),
+        file_name: "canceled.pdf".to_string(),
+        printer_id: "GONE".to_string(),
+        created_at_ms: 1_785_833_607_000,
+        options: BTreeMap::new(),
+        terminal_status: Some(crate::cups::JobStatus::Canceled),
+    });
+    let app = super::router(&state);
+    let Ok(request) = new_request("GET", "/api/jobs/GONE-12").body(Body::empty()) else {
+        return;
+    };
+    let (status, body, _) = call(&app, request).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let job: serde_json::Value = serde_json::from_str(&body).unwrap_or(serde_json::Value::Null);
+    assert_eq!(
+        job.get("status").and_then(serde_json::Value::as_str),
+        Some("canceled"),
+        "{body}"
+    );
+    assert_eq!(
+        job.get("file_id").and_then(serde_json::Value::as_str),
+        Some("file-canceled")
+    );
+}
+
 /// 回归：纯任务号在唯一命中时应能解析（前端重打/取消只用展示 id）。
 #[tokio::test]
 async fn bare_job_number_resolves_when_unique() {
@@ -845,6 +1101,7 @@ async fn ambiguous_job_number_is_rejected() {
             printer_id: printer.to_string(),
             created_at_ms: 1_785_833_607_000,
             options: BTreeMap::new(),
+            terminal_status: None,
         });
     }
     let app = super::router(&state);

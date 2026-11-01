@@ -35,6 +35,9 @@ export const MAX_JOB_AGE_MS = 24 * 60 * 60 * 1000
 
 export type NoticeKind = 'success' | 'error' | 'info'
 
+/** 同时保留的通知上限，避免长时间错误/轮询把内存和版面无限撑大。 */
+export const MAX_NOTICES = 20
+
 export interface Notice {
   id: string
   kind: NoticeKind
@@ -316,7 +319,10 @@ export function appReducer(state: AppState, action: Action): AppState {
       return resetSession('', null)
 
     case 'notice/add':
-      return { ...state, notices: [...state.notices, action.notice] }
+      return {
+        ...state,
+        notices: [...state.notices, action.notice].slice(-MAX_NOTICES),
+      }
 
     case 'notice/dismiss':
       return { ...state, notices: state.notices.filter((notice) => notice.id !== action.id) }
