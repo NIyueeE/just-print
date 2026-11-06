@@ -1,6 +1,6 @@
 [package]
 name = "just-print"
-version = "0.4.1"
+version = "0.4.2"
 edition = "2024"
 description = "A lightweight web service for printing documents via CUPS"
 license = "MIT"
