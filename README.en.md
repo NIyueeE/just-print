@@ -21,8 +21,8 @@ Docker and Podman.
   subprocesses, and caches printer/job snapshots with a short TTL.
 - `POST /api/print` honours the standard `Idempotency-Key` header, so retries do
   not produce duplicate prints and a lost response is reconciled via `job-name`.
-- Job list, status and cancel endpoints; a complete upload → preview → print →
-  retry loop.
+- Job list, status and cancel endpoints; upload, preview, print and retry all
+  run from the UI.
 - A built-in MCP endpoint: Claude Code and Cursor can inspect the device, upload
   a PDF and submit it for printing from the terminal. One connection is bound to
   one printer, file bytes travel through a one-time ticket, and the token never

@@ -131,7 +131,7 @@ CUPS 在容器启动时由入口脚本拉起，打印机可以通过以下任一
   `lpinfo` 枚举 USB 打印机，用 USB URI 里的厂商/型号拼出 **IEEE 1284 device-id**，
   交给 `lpinfo -m --device-id` 取候选 PPD，再**逐行校验**候选是否真的属于该厂商/
   型号（CUPS 的 device-id 过滤会把大量无关 PPD 一并返回，直接取第一行会选错驱动）；
-  没有可信候选就回落到通用 PCL，并在日志里提示。**不做任何"按型号猜驱动"的跨厂商
+  没有可信候选就回落到通用 PCL，并在日志里提示。**不做任何「按型号猜驱动」的跨厂商
   模糊匹配**（猜错会打出乱码），需要指定厂商驱动时用 `JUST_PRINT_USB_PPD`。
   已有同名队列会跳过，但仍会应用 `JUST_PRINT_USB_OPTIONS`。
 - 手动管理：进入容器后用 `lpadmin` / `lp` 自行管理。
@@ -147,8 +147,8 @@ CUPS 选择驱动只有两条正路：
    厂商专有驱动（联想、爱普生、佳能等）**无法凭空生成**，只能退到镜像自带的通用
    PPD（PCL6 / PCL / PostScript），或用 `JUST_PRINT_USB_PPD` 指定厂商 PPD。
 
-所以“自动加载驱动”的边界是：**设备能自我描述（IPP）→ 全自动；只能给 1284
-device-id 且驱动不在镜像里 → 只能通用驱动或人工指定 PPD**。
+所以「自动加载驱动」的边界是：设备能自我描述（IPP）时全自动；只能给 1284
+device-id 且驱动不在镜像里时，用通用驱动或人工指定 PPD。
 
 以联想 LJ4000D 为例（官方参数：PCL6 / BR-Script3，标配双面单元，Debian 无对应包）：
 
@@ -173,7 +173,7 @@ Duplex/2-Sided Printing: *None DuplexNoTumble DuplexTumble
 Option1/Duplexer: *False True
 ```
 
-PPD 里双面受一个**可安装选项**（`Option1` / `OptionDuplex`，人类名 “Duplexer”）
+PPD 里双面受一个**可安装选项**（`Option1` / `OptionDuplex`，人类名 「Duplexer」）
 约束；如果它默认 `False`，CUPS 生成 `sides-supported` 时会检测到冲突
 （`ppdInstallableConflict`），于是只上报 `one-sided`——界面自然只有「单面」。
 硬件是否安装双面器无法从 USB 自动探测，因此需要部署者声明：
@@ -204,7 +204,7 @@ PPD 里双面受一个**可安装选项**（`Option1` / `OptionDuplex`，人类�
   `grep -nE '^\*(OpenUI|Default|Option)' /etc/cups/ppd/<队列>.ppd`。
 - **可安装选项**（ppdc 的 `Installable` 指令生成）固定是布尔，取值只有
   `False` / `True`：通用 PCL PPD 是 `Option1=False|True`（显示名 Duplexer），
-  HPLIP PPD 是 `OptionDuplex=False|True`（显示名 “Duplexer Installed”）。
+  HPLIP PPD 是 `OptionDuplex=False|True`（显示名 「Duplexer Installed」）。
 - 其它 PPD 选项同样可传（如 `InputSlot=Tray2`、`PageSize=A4`），但它们大多是
   作业级默认值；对「解锁硬件能力」起作用的主要是可安装选项。
 - 多个选项用逗号分隔：`JUST_PRINT_USB_OPTIONS=OptionDuplex=True,InputSlot=Tray2`。

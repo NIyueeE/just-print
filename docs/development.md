@@ -115,6 +115,7 @@ CI：推 tag 时先跑完整门禁，通过后才构建推送镜像并创建 Git
   `frontend/src/api.ts`。
 
 更多实现细节见 [architecture.md](architecture.md)。
+
 ## 前端视觉检查（无容器环境）
 
 宿主机没有 CUPS / LibreOffice 时，真实后端无法提供可用数据（`/api/printers`

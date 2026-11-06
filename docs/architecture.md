@@ -63,8 +63,8 @@ just-print/
 - 后端通过 `ipp` crate 直接与 CUPS 通信，使用 RFC 8011 操作：
   `CUPS-Get-Printers`（枚举）、`Get-Printer-Attributes`（选项）、
   `Print-Job`（提交文档）、`Get-Job-Attributes` / `Get-Jobs`（查询）、
-  `Cancel-Job`（取消）。应用层**不再**为每个请求 fork
-  `lp` / `lpstat` / `lpoptions` / `ipptool` 子进程。
+  `Cancel-Job`（取消）。应用层不 fork `lp` / `lpstat` / `lpoptions` /
+  `ipptool` 子进程。
 - 打印选项直接读 IPP 的 `*-supported` / `*-default` 属性（`media`、
   `sides`、`print-color-mode`、`print-quality`、`printer-resolution`、
   `copies`、`number-up`、`media-type`、`output-bin`、
